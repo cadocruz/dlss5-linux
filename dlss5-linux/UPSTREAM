@@ -1,0 +1,5 @@
+Kizzuwatnaa/DLSS5-Autopilot
+commit 8225fff (v1.7.1, 2026-09-06)
+license MIT (see LICENSE.upstream)
+core/ vendored unmodified; all Linux changes live in linuxport/
+previous: 23f96c6 (v1.6.1, 2026-09-05)

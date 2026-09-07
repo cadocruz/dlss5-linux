@@ -1,0 +1,388 @@
+"""Where every component is downloaded from - all in one place, auditable.
+
+This tool never contacts a private server. It stays within these hosts:
+    reshade.me
+    raw.githubusercontent.com   (crosire/reshade-shaders)
+    api.github.com / github.com (DLSS5-Feeder, rhi-repo, DXVK,
+                                 DLSS5-Reshade-AIO, dxvk-remix-plus-dlssnr,
+                                 REFramework-nightly)
+    codeload.github.com         (LumeniteFX, vort_Shaders)
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import time
+import urllib.error
+import http.client
+import urllib.request
+from pathlib import Path
+
+UA = {"User-Agent": "dlss5-autopilot/1.3.1 (+local install helper)"}
+
+RESHADE_HOME = "https://reshade.me"
+RESHADE_SETUP_RE = re.compile(r"/downloads/ReShade_Setup_([\d.]+)_Addon\.exe")
+
+RESHADE_HEADERS_BASE = "https://raw.githubusercontent.com/crosire/reshade-shaders/slim/Shaders/"
+RESHADE_HEADERS = ("ReShade.fxh", "ReShadeUI.fxh", "DrawText.fxh")
+
+FEEDER_API = "https://api.github.com/repos/jlrouzies-fr/DLSS5-Feeder/releases/latest"
+# The feeder's author ships test builds as pre-releases; /latest never lists
+# them. Newer add-on builds (renodx-dlss5 4.6+) are only supported by those.
+FEEDER_LIST_API = "https://api.github.com/repos/jlrouzies-fr/DLSS5-Feeder/releases?per_page=15"
+LUMENITE_ZIP = "https://codeload.github.com/umar-afzaal/LumeniteFX/zip/refs/heads/mainline"
+RHI_API = "https://api.github.com/repos/RankFTW/rhi-repo/releases?per_page=100"
+BRIDGE_API = "https://api.github.com/repos/NIGos/dlss5-bridge/releases/latest"
+UPSTREAM_API = "https://api.github.com/repos/matiasLombo/neural-upstream/releases/latest"
+# The file name is load-bearing: the NGX snippet only creates the feature
+# for a caller whose module path contains "nvngx.dll".
+UPSTREAM_ASSET = "nvngx.dll.addon64"
+# GitHub's plain redirect to the newest asset. Not an API call, so it still
+# works when the 60-an-hour allowance is spent and nothing is cached yet.
+UPSTREAM_LATEST = ("https://github.com/matiasLombo/neural-upstream/releases/"
+                   "latest/download/" + UPSTREAM_ASSET)
+STANDALONE_API = ("https://api.github.com/repos/kibblerz/DLSS5-Reshade-AIO/"
+                  "releases/latest")
+# kibblerz's standalone add-on ships three loose assets. The plain nvngx.dll
+# is its caller-identity bridge: without it beside the add-on nothing
+# initialises ("required private runtime dependency missing" in its log).
+STANDALONE_ASSETS = ("standalone-dlssnr.addon64", "nvngx.dll", "DLSS5_AIO_Feed.fx")
+STANDALONE_LATEST = ("https://github.com/kibblerz/DLSS5-Reshade-AIO/releases/"
+                     "latest/download/")
+# Vortigern's VORT shaders (MIT). vort_Motion.fx is the optical-flow provider
+# the standalone add-on schedules for real motion vectors; without it the
+# add-on runs on zero-motion guides. The whole-repo zip, as with LumeniteFX:
+# the .fx needs a dozen .fxh includes and a texture beside it, and codeload
+# is not rate limited.
+VORT_ZIP = "https://codeload.github.com/vortigern11/vort_Shaders/zip/refs/heads/main"
+VORT_ZIP_NAME = "vort_Shaders-main.zip"
+
+# lunks/dxvk-remix-plus-dlssnr: an RTX Remix runtime with the DLSS-NR stage
+# built in, as a drop-in for any Remix game's .trex folder. NVIDIA's own
+# runtime has no neural pass at all, so a game whose mod ships the stock
+# runtime needs this before the route can do anything.
+REMIX_RUNTIME_API = ("https://api.github.com/repos/lunks/"
+                     "dxvk-remix-plus-dlssnr/releases/latest")
+# d3d9.dll is the runtime itself; remix_nvngx.dll is the caller-identity
+# bridge, and its name is load-bearing (the snippet checks the caller's
+# module path for "nvngx.dll").
+REMIX_RUNTIME_ASSETS = ("d3d9.dll", "remix_nvngx.dll")
+REMIX_RUNTIME_LATEST = ("https://github.com/lunks/dxvk-remix-plus-dlssnr/"
+                        "releases/latest/download/")
+
+# None = take the newest build from the mirror. On the feeder route the pick
+# is narrowed by renodx_for_feeder(): the feeder's stable release only works
+# with 4.55, its pre-releases with 4.6/4.7.
+RENODX_DEFAULT = None
+
+# The last renodx-dlss5 build the feeder's STABLE release (0.7.0) accepts.
+# Its README pins it: "newer builds now overlap this project and conflict".
+# Support for 4.6 arrived in 0.8.0-beta.3 and for 4.7 in 0.9.0-beta.1.
+FEEDER_RENODX_PIN = "4.55"
+
+# The last renodx-dlss5 build that works on OpenGL. 4.70's fenced workset
+# pool never recycles under GL - "NR workset pool exhausted; preserving game
+# output" after four frames - on every OpenGL game perseval-BLR verified
+# (OpenMW, ioquake3, Serious Sam, Jedi Academy, Riddick, DOOM 3 BFG).
+OPENGL_RENODX_PIN = "4.60"
+
+# NVIDIA driver 616.64 (32.0.16.1664) and 616.86 route NGX feature 18 into
+# nvngx_dlssnr.dll itself, and with renodx-dlss5 4.6/4.7 every evaluate
+# then faults inside D3D12Core.dll - the game renders on, no neural frame
+# ever arrives. Measured by the feeder's author on an RTX 5090 (DLSS5-Feeder
+# #54, 0.14.0-beta.1 notes): 4.55 passes 300/300 on the same driver, 4.7
+# passes 0/300. dlss5-bridge 1.4.9 closes that route in memory; the
+# renodx-dlss5 add-on cannot, so on these drivers it is pinned to 4.55.
+DRIVER_FAULT_MIN = "616.64"
+DRIVER_FAULT_RENODX_PIN = "4.55"
+
+# The first DLSS5-Feeder that reaches Direct3D 10 (a private D3D11 relay
+# device inside the game; nothing extra to install). Older builds refuse
+# D3D10 games outright.
+FEEDER_DX10_MIN = "v0.13.1-beta.1"
+
+
+class RateLimited(RuntimeError):
+    """GitHub's anonymous API allows 60 requests an hour per IP."""
+
+
+def _get(url: str, timeout: int = 60, attempts: int = 3) -> bytes:
+    """One small read (a release listing, reshade.me's page). A timeout or a
+    dropped connection is retried with a pause; an HTTP error is not."""
+    req = urllib.request.Request(url, headers=UA)
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code in (403, 429) and "api.github.com" in url:
+                raise RateLimited(
+                    "GitHub is rate limiting this connection (60 anonymous API "
+                    "requests per hour). Wait an hour and try again, or use a VPN / "
+                    "different network. Downloads already in the cache still work."
+                ) from e
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError,
+                http.client.HTTPException) as e:
+            # HTTPException: the body dropped after the headers (IncompleteRead)
+            last = e
+            if attempt == attempts - 1:
+                raise
+            time.sleep(2.0 * (attempt + 1))
+    raise last if last else RuntimeError(url)
+
+
+# GitHub allows 60 anonymous API calls an hour per address. That is easy to
+# exhaust, and being unable to install anything because of it is unacceptable -
+# so every API answer is kept on disk and reused when the live call fails.
+_API_CACHE = Path(os.environ.get("LOCALAPPDATA", Path.home())) \
+    / "dlss5-autopilot" / "api-cache"
+_API_FRESH_SECONDS = 6 * 3600
+
+# Set by _json when it had to fall back to a stale copy, so the installer can
+# tell the user why the version list might be out of date.
+last_fallback: str | None = None
+
+
+def _cache_path(url: str) -> Path:
+    return _API_CACHE / (hashlib.sha256(url.encode("utf8")).hexdigest()[:32] + ".json")
+
+
+def _json(url: str):
+    """Fetch JSON, backed by an on-disk cache.
+
+    Fresh cache is used without a request at all. If the request fails - rate
+    limit, no connection - a stale cache of any age is used rather than
+    failing the install outright.
+    """
+    global last_fallback
+    p = _cache_path(url)
+    try:
+        age = time.time() - p.stat().st_mtime
+        if age < _API_FRESH_SECONDS:
+            return json.loads(p.read_text(encoding="utf8"))
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    try:
+        raw = _get(url).decode("utf8")
+        data = json.loads(raw)
+        try:
+            _API_CACHE.mkdir(parents=True, exist_ok=True)
+            p.write_text(raw, encoding="utf8")
+        except OSError:
+            pass
+        return data
+    except Exception as original:
+        try:
+            data = json.loads(p.read_text(encoding="utf8"))
+            age_h = int((time.time() - p.stat().st_mtime) / 3600)
+        except (OSError, json.JSONDecodeError):
+            # Nothing cached to fall back to: report why the LIVE call failed,
+            # not the missing cache file - that would be a misleading error.
+            raise original from None
+        last_fallback = (f"GitHub could not be reached (rate limit or no "
+                         f"connection); using the version list cached "
+                         f"{age_h}h ago.")
+        return data
+
+
+def resolve_reshade() -> tuple[str, str]:
+    """(version, url) of the latest ReShade add-on installer, from reshade.me."""
+    html = _get(RESHADE_HOME).decode("utf8", "replace")
+    m = RESHADE_SETUP_RE.search(html)
+    if not m:
+        raise RuntimeError("Could not find the ReShade add-on installer link on reshade.me.")
+    return m.group(1), RESHADE_HOME + m.group(0)
+
+
+def feeder_releases() -> list[tuple[str, bool]]:
+    """Every feeder release GitHub lists, newest first: (tag, is_prerelease).
+
+    The version dropdown is built from this, so a build that broke a game can
+    be swapped for the one before it without leaving the tool.
+    """
+    rels = _json(FEEDER_LIST_API)
+    if not isinstance(rels, list):
+        return []
+    return [(r.get("tag_name", "?"), bool(r.get("prerelease")))
+            for r in rels if not r.get("draft") and r.get("tag_name")]
+
+
+def resolve_feeder(prerelease: bool = False, tag: str = "") -> tuple[str, dict[str, str]]:
+    """DLSS5-Feeder release: (tag, {filename: download_url}).
+
+    `tag` pins one exact release. Otherwise `prerelease=True` takes the newest
+    build of any kind, which is where the feeder's support for the newer
+    DLSS 5 add-on generations lives, and the default is the newest stable
+    release, exactly as GitHub's /latest reports it.
+    """
+    if tag:
+        rels = _json(FEEDER_LIST_API)
+        rel = next((r for r in (rels if isinstance(rels, list) else [])
+                    if r.get("tag_name") == tag), None)
+        if rel is None:
+            raise RuntimeError(f"DLSS5-Feeder release {tag} is not on GitHub's "
+                               f"release list (the newest 15 are checked).")
+    elif prerelease:
+        rels = _json(FEEDER_LIST_API)
+        rels = [r for r in rels if not r.get("draft")] if isinstance(rels, list) else []
+        rel = rels[0] if rels else _json(FEEDER_API)
+    else:
+        rel = _json(FEEDER_API)
+    assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+    return rel.get("tag_name", "?"), assets
+
+
+def feeder_key(tag: str) -> tuple:
+    """'v0.9.0-beta.1' -> (0, 9, 0, 1, 1): sortable, betas below the release.
+
+    A plain release of the same number sorts above any of its betas, which is
+    how the project numbers them.
+    """
+    nums = [int(n) for n in re.findall(r"\d+", tag or "")]
+    base = tuple(nums[:3]) + (0,) * (3 - len(nums[:3]))
+    if "beta" in (tag or "").lower():
+        return base + (0, nums[3] if len(nums) > 3 else 0)
+    return base + (1, 0)
+
+
+def renodx_for_feeder(feeder_tag: str) -> str | None:
+    """Which renodx-dlss5 build a given feeder release accepts.
+
+    None means "the newest is fine". Anything below 0.8.0-beta.3 is pinned to
+    4.55 - that is the mismatch behind CreateFeature 0xC0000005 crashes on
+    otherwise correct feeder installs.
+    """
+    if feeder_key(feeder_tag) < feeder_key("v0.8.0-beta.3"):
+        return FEEDER_RENODX_PIN
+    return None
+
+
+def resolve_bridge() -> tuple[str, str]:
+    """Latest dlss5-bridge release: (tag, addon download url)."""
+    rel = _json(BRIDGE_API)
+    for a in rel.get("assets", []):
+        if a["name"].lower().endswith(".addon64"):
+            return rel.get("tag_name", "?"), a["browser_download_url"]
+    raise RuntimeError("The dlss5-bridge release has no .addon64 asset.")
+
+
+def resolve_upstream() -> tuple[str, str]:
+    """Latest neural-upstream release: (tag, addon download url).
+
+    Falls back to the "latest" redirect when the API is out of reach and
+    nothing is cached: the route must not be unavailable just because this
+    machine has spent its anonymous allowance on the other components.
+    """
+    try:
+        rel = _json(UPSTREAM_API)
+    except Exception:
+        return "latest", UPSTREAM_LATEST
+    for a in rel.get("assets", []):
+        if a["name"].lower() == UPSTREAM_ASSET:
+            return rel.get("tag_name", "?"), a["browser_download_url"]
+    raise RuntimeError(f"The neural-upstream release has no {UPSTREAM_ASSET} asset.")
+
+
+def resolve_standalone() -> tuple[str, dict[str, str]]:
+    """Latest DLSS5-Reshade-AIO release: (tag, {filename: url}).
+
+    The three release assets plus the VORT shader zip. Same fallback as
+    neural-upstream: with the API out of reach and nothing cached, GitHub's
+    "latest" download redirect still resolves each asset by name.
+    """
+    urls = {VORT_ZIP_NAME: VORT_ZIP}
+    try:
+        rel = _json(STANDALONE_API)
+    except Exception:
+        for name in STANDALONE_ASSETS:
+            urls[name] = STANDALONE_LATEST + name
+        return "latest", urls
+    assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+    missing = [n for n in STANDALONE_ASSETS if n not in assets]
+    if missing:
+        raise RuntimeError("The DLSS5-Reshade-AIO release is missing "
+                           f"{', '.join(missing)}.")
+    for name in STANDALONE_ASSETS:
+        urls[name] = assets[name]
+    return rel.get("tag_name", "?"), urls
+
+
+def resolve_remix_runtime() -> tuple[str, dict[str, str]]:
+    """Latest dxvk-remix-plus-dlssnr release: (tag, {filename: url}).
+
+    Same fallback as neural-upstream and the standalone add-on: with the API
+    rate limited and nothing cached, GitHub's "latest" download redirect
+    still resolves each asset by name, so the route stays available.
+    """
+    try:
+        rel = _json(REMIX_RUNTIME_API)
+    except Exception:
+        return "latest", {n: REMIX_RUNTIME_LATEST + n
+                          for n in REMIX_RUNTIME_ASSETS}
+    assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+    missing = [n for n in REMIX_RUNTIME_ASSETS if n not in assets]
+    if missing:
+        raise RuntimeError("The dxvk-remix-plus-dlssnr release is missing "
+                           f"{', '.join(missing)}.")
+    return rel.get("tag_name", "?"), {n: assets[n] for n in REMIX_RUNTIME_ASSETS}
+
+
+def _ver_key(tag: str, prefix: str) -> tuple:
+    """'dlss-310.8.0' -> (310, 8, 0), a sortable key."""
+    raw = tag[len(prefix):].lstrip("-")
+    nums = re.findall(r"\d+", raw)
+    return tuple(int(n) for n in nums) if nums else (0,)
+
+
+_CATALOG_CACHE: dict[str, list[dict]] | None = None
+
+
+def rhi_catalog(force: bool = False) -> dict[str, list[dict]]:
+    """Group rhi-repo releases by component family (newest first).
+
+    Cached for the lifetime of the process: installing several games in one
+    session should not burn through GitHub's anonymous API allowance.
+    """
+    global _CATALOG_CACHE
+    if _CATALOG_CACHE is not None and not force:
+        return _CATALOG_CACHE
+    rels = _json(RHI_API)
+    fams: dict[str, list[dict]] = {}
+    for r in rels:
+        tag = r.get("tag_name", "")
+        for prefix, fam in (("renodx-dlss5", "renodx"),
+                            ("renodx-dlss-SF", "renodx_sf"),
+                            ("dlssnr", "dlssnr"),
+                            ("dlssg", "dlssg"),
+                            ("dlss-", "dlss")):
+            if not tag.startswith(prefix):
+                continue
+            for a in r.get("assets", []):
+                if not a["name"].endswith(".zip"):
+                    continue
+                fams.setdefault(fam, []).append({
+                    "tag": tag,
+                    "label": tag[len(prefix):].lstrip("-") or tag,
+                    "url": a["browser_download_url"],
+                    "size": a.get("size", 0),
+                    "key": _ver_key(tag, prefix.rstrip("-")),
+                })
+            break
+    for fam in fams.values():
+        fam.sort(key=lambda d: d["key"], reverse=True)
+    _CATALOG_CACHE = fams
+    return fams
+
+
+def pick(entries: list[dict], want: str | None) -> dict:
+    """Pick the entry whose label/tag matches `want`, else the newest."""
+    if want:
+        for e in entries:
+            if e["label"] == want or e["tag"] == want:
+                return e
+    return entries[0]
