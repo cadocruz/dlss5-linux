@@ -46,10 +46,13 @@ REASON_FEEDER_D3D11 = (
 REASON_FEEDER_D3D12 = (
     "No DLSS in this D3D12 game. The feeder has to create DLSS on the game's "
     "own device through ReShade's wrapper, and under Proton that create faults "
-    "inside vkd3d-proton on most launches (FF7 Remake: 11 of 15). It is offered "
-    "because nothing else is; expect it not to work until the feeder or "
-    "dxvk-nvapi changes. HDR10 games: the feed also came out black on a 10-bit "
-    "PQ swapchain.")
+    "inside vkd3d-proton on most launches (FF7 Remake: 11 of 15); expect it not "
+    "to work until the feeder or dxvk-nvapi changes. What does work here is the "
+    "out-of-process DLSS5VKLayer route: a Vulkan layer hands each presented frame "
+    "to a helper that runs the model on its own device, nothing in the game "
+    "folder (FF7 Remake runs on it). `launch-options --vklayer --apply` adds its "
+    "token once the layer is installed (examples/vklayer). Play in SDR on it for "
+    "now: on an HDR10 swapchain the layer has an upstream rebuild bug.")
 
 
 def detect(install_dir, folder, api, bitness, sm=None):

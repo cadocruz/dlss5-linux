@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import linuxport  # noqa: E402
 linuxport.activate()
 from core import components, diagnose, dlss, feedcfg, games, gpu, installer, optiscaler, pe, reshade_ini, sources  # noqa: E402
-from linuxport import games as lgames, pins, proton, tuning, verify as lverify  # noqa: E402
+from linuxport import games as lgames, pins, proton, tuning, verify as lverify, vklayer  # noqa: E402
 
 # --- palette (AESTHETIC.md) -------------------------------------------------
 BG, RAIL, PANEL, FIELD = "#0b0c0e", "#08090a", "#0e1013", "#121519"
@@ -379,7 +379,8 @@ class App(QtWidgets.QMainWindow):
         act = QtWidgets.QHBoxLayout()
         for text, fn in (("did it work?", self._diagnose), ("uninstall", self._uninstall), ("check versions", self._check_components),
                          ("open folder", self._open_folder), ("what will happen?", self._preview), ("launch options", self._launch_options),
-                         ("apply overrides", self._apply_launch_options), ("upgrade game dlss", self._upgrade_dlss), ("game notes", self._game_notes)):
+                         ("apply overrides", self._apply_launch_options), ("upgrade game dlss", self._upgrade_dlss), ("game notes", self._game_notes),
+                         ("vk layer", self._vklayer)):
             b = QtWidgets.QPushButton(text); b.clicked.connect(fn); act.addWidget(b)
         act.addStretch(1); v.addLayout(act)
         return w
@@ -462,6 +463,8 @@ class App(QtWidgets.QMainWindow):
         if self.game:
             level, why = installer.reliability(self.game, path, "" if self.support.native_dlss else self.support.upscaler)
             self._log(f"> route: {dlss.LABELS[path]}  [{level}]", "head"); self._log(f"  {why}")
+            hint = vklayer.suggestion(self.game, self.support.native_dlss)
+            if hint: self._log(f"  vk layer: {hint}")
 
     def _on_workres(self) -> None:
         v = self.sc_work.value(); opti = self.route == dlss.OPTI
@@ -552,6 +555,24 @@ class App(QtWidgets.QMainWindow):
         if self.route == dlss.OPTI:
             return opt.opti_proxy or proton.installed_proxy(g) or optiscaler.suggest_proxy(g.install_dir)
         return installer._proxy_name(g.api, opt.reshade_proxy)
+
+    def _vklayer(self) -> None:
+        g = self.game; self._log(""); self._log("=== vk layer (out-of-process route) ===", "head")
+        m = vklayer.manifest()
+        self._log(f"  layer   : {'installed: ' + str(m) if m else 'not installed -- ' + vklayer.UPSTREAM + ' (examples/vklayer)'}", "" if m else "warn")
+        self._log(f"  helper  : {'running' if vklayer.helper_running() else 'stopped -- dlssnr-helper start before the game'}",
+                  "ok" if vklayer.helper_running() else "warn")
+        digest, label = vklayer.runtime(); self._log(f"  runtime : {label}")
+        hint = vklayer.suggestion(g, self.support.native_dlss) if self.support else None
+        if hint: self._log(f"  fit     : {hint}")
+        cur = proton.current_launch_options(g)
+        self._log(f"  token   : {'present' if vklayer.enabled_in(cur) else 'absent'} -- launch options for this route:")
+        self._log(f"     {vklayer.launch_line(g, True, self.ck_indicator.isChecked())}")
+        self._log("  (the cli writes it while steam is closed: dlss5_linux.py launch-options <game> --vklayer --apply)")
+        st = vklayer.shm_status()
+        if st: self._log(f"  live    : frames={st.get('layer_frames', '0')} model_up={st.get('model_up', '0')} hdr_detected={st.get('hdr_detected', '0')}")
+        self._log("  controls:")
+        for c in vklayer.CONTROLS: self._log(f"   - {c}")
 
     def _launch_options(self) -> None:
         g = self.game; proxy = self._proxy()

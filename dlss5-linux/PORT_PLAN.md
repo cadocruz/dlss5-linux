@@ -205,3 +205,30 @@ Not yet exercised on a real display -- run it.
   choice, "apply overrides", "upgrade game dlss", "game notes".
 - Untested live: a fresh install through the port's own path (tuning hooks),
   the GUI on a display, feeder 0.14.0-beta.5 on Dreamfall.
+
+### 2026-09-11 -- the out-of-process route, runtime hashes, driver 615.71
+
+- `linuxport/vklayer.py` (new): bmitch87/DLSS5VKLayer as a route the port
+  knows about without owning: install/manifest/helper detection, the one
+  launch token (`VKLayer_DLSS5=1`), the NR runtime by sha256 (NVIDIA-signed
+  310.8 for RTX 50, ShortFuse cross-generation for 20/30/40, the widely
+  copied patched build flagged), live counters via `dlssnr-shmctl`, and a
+  verify that reads helper.log + the Proton log for the layer's own lines
+  (create result, transport, HDR proxy state, the per-frame rebuild on PQ10).
+- CLI: `vklayer [status|controls]`, `launch-options --vklayer|--no-vklayer
+  [--apply]`, `verify --vklayer`; `recommend` prints a vk-layer line for
+  D3D12-without-DLSS and Vulkan titles. GUI: "vk layer" button, a hint under
+  the route reasoning. `policy.py` REASON_FEEDER_D3D12 now points at it.
+- `verify.py`: stale-log warning when no in-process payload is installed
+  (restore keeps logs); feeder depth-probe FLAT surfaced.
+- Measured: FF7 Remake (D3D12, no DLSS, the feeder's faulting title) runs NR
+  on the layer, 4,531 frames, visible effect; three upstream findings
+  (composition rebuilt every frame on PQ10 with the 8-bit proxy; HDR proxy
+  gated on a requirements query that fails; dma-buf impossible under
+  winevulkan). Driver 615.71.09: no change for either in-process route.
+- Not done: re-vendoring Autopilot 1.8.1 (gpu.driver_at_least grew a `have`
+  parameter; shim must follow), a feeder pin move to 0.15.1 (needs a
+  Dreamfall run), DLSS 310.9.1 is staged and swapped on FF7R only.
+- `linuxport/pe.py`: a known-executable table for renderers the static import
+  table misreports (ff7remake_.exe imports d3d11.dll, renders D3D12), so the
+  feeder-on-D3D12 reasoning and the vk-layer hint land on the right games.

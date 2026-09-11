@@ -61,6 +61,9 @@ REPOS = [
     ("wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass", "OptiScaler PreSR fork",
      "NR before the upscaler (pre-SR) + 1-3 passes; releases have zips"),
     # --- Proton-side pieces the FF7 Remake feeder fault lives in (2026-09-06) ---
+    # --- assessed 2026-09-11: the out-of-process Vulkan-layer route (Remake works on it) ---
+    ("bmitch87/DLSS5VKLayer", "DLSS5VKLayer",
+     "Linux Vulkan layer + Wine helper; the only route for native games and D3D12-without-DLSS"),
     ("jp7677/dxvk-nvapi", "dxvk-nvapi",
      "NVAPI D3D12 cubin path faults on the feeder's same-device create (FINDINGS.md)"),
     ("HansKristian-Work/vkd3d-proton", "vkd3d-proton",

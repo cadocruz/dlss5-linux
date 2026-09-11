@@ -73,7 +73,18 @@ def _contains(path: Path, needle: bytes) -> bool:
     return False
 
 
+# Executables whose static import table says one thing and whose renderer does
+# another. Each entry is a measured fact, not a guess: the feeder logged a
+# "same-device D3D12 session" for Remake, and vkd3d-proton created its swapchain.
+_KNOWN_API = {
+    "ff7remake_.exe": ("DX12", "UE4 title that imports d3d11.dll statically but renders D3D12 (feeder and vkd3d-proton logs)"),
+}
+
+
 def detect_api(path: Path) -> tuple[str, str]:
+    known = _KNOWN_API.get(path.name.lower())
+    if known:
+        return known
     # Unity first: its player embeds D3D12 symbols too, so the needle scan
     # below would mislabel every Unity title as DX12.
     if (path.parent / "UnityPlayer.dll").is_file() or (path.parent / (path.stem + "_Data")).is_dir():

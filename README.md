@@ -12,25 +12,41 @@ standalone tool (`proton-tool/dlss5_proton.py`) that the port still calls for
 Proton-specific work: prefix discovery, Steam launch options, and swapping a
 game's own DLSS runtimes.
 
-Tested on an RTX 5090 with proton-cachyos 11 and GE-Proton 11 (Sept 2026).
-Everything here is experimental community tooling around a leaked NVIDIA
-runtime; nothing is official, and none of the binaries are redistributed
-by this repository.
+Tested on an RTX 5090 with proton-cachyos 11 and GE-Proton 11, NVIDIA
+610.57 and 615.71 (Sept 2026). Everything here is experimental community
+tooling around a leaked NVIDIA runtime; nothing is official, and none of the
+binaries are redistributed by this repository.
 
 ## What works (measured, not assumed)
 
 | game | api | route | result |
 |---|---|---|---|
-| FINAL FANTASY VII REBIRTH | D3D12 + DLSS | OptiScaler (nightly) | DLSS 310.9 + NR, HDR, ~5-8 ms/frame at 4K |
+| FINAL FANTASY VII REBIRTH | D3D12 + DLSS | OptiScaler (nightly) | DLSS 310.9.1 + NR, HDR, ~5-8 ms/frame at 4K |
 | 007 First Light | D3D12 + DLSS | OptiScaler (nightly) | works; the build that fixed the v0.2.x deadlock |
 | Horizon Forbidden West | D3D12 + DLSS | OptiScaler as winmm.dll | works |
 | Stellar Blade | D3D12 + DLSS | native (ReShade + RenoDX) or OptiScaler | both work; native keeps the game's FG |
 | FINAL FANTASY XIV | D3D11 + DLSS | OptiScaler dx11on12 bridge | works via XIVLauncher-RB + umu, see findings |
 | Dreamfall Chapters | D3D11, no DLSS | feeder (private D3D12 device) | works, DLAA |
 | FINAL FANTASY VII REMAKE | D3D12, no DLSS | feeder (same-device) | does not work: create faults in vkd3d-proton |
+| FINAL FANTASY VII REMAKE | D3D12, no DLSS | DLSS5VKLayer (out of process) | works: nothing in the game folder, the model runs beside the game |
 | Cyberpunk 2077 (GOG, RED4ext) | D3D12 + DLSS | OptiScaler | livelock; incompatible with the mod stack |
 
 `FINDINGS.md` has the why for each row and the dead ends, so nobody repeats them.
+
+## Five routes, one of them outside the game
+
+Four routes put something in the game folder: OptiScaler as a proxy DLL, or
+ReShade with the feeder / native / bridge add-ons. The fifth,
+[DLSS5VKLayer](https://github.com/bmitch87/DLSS5VKLayer), is a Linux Vulkan
+layer that hands each presented frame to a helper running the model under a
+Proton runner and takes the result back. It reaches what the others cannot:
+native Linux Vulkan games, and D3D12 games without DLSS, where the feeder's
+same-device create faults under vkd3d-proton. It costs what a post-present
+route costs: synthetic motion vectors from optical flow, no depth, the HUD
+included, no upscaling. A game with its own DLSS is still better served by
+OptiScaler. `examples/vklayer/README.md` is the recipe; the port knows the
+route (`vklayer status`, `launch-options --vklayer`, `verify --vklayer`)
+without installing it, and names the neural-rendering runtime by hash.
 
 ## Install
 
@@ -47,6 +63,10 @@ python3 dlss5_linux.py install "Stellar Blade" --indicator
 python3 dlss5_linux.py launch-options "Stellar Blade" --apply   # Steam closed
 python3 dlss5_linux.py verify "Stellar Blade"                    # after one launch
 python3 dlss5_gui_linux.py                    # the same, as a three-page wizard
+
+python3 dlss5_linux.py vklayer status         # the out-of-process route: layer, helper, runtime
+python3 dlss5_linux.py launch-options "FINAL FANTASY VII REMAKE" --vklayer --apply
+python3 dlss5_linux.py verify "FINAL FANTASY VII REMAKE" --vklayer
 ```
 
 Non-Steam games take a folder or `.exe` (`--prefix` for the Wine prefix if it
@@ -61,12 +81,24 @@ its `launcher.ini` overrides are written by `launch-options --apply`.
   `--optiscaler` at a local `.zip`/`.7z`. `fallback` is Dagherbou v0.1.2,
   `latest` whatever Dagherbou publishes (v0.2.x deadlocked under Proton here).
 * `dlls <game> install` swaps the game's own DLSS SR/RR/FG runtimes for the
-  newest archive beside the tools (310.9.0 at the time of writing); Streamline
-  is left alone on purpose. `dlls <game> restore` undoes it.
+  newest archive beside the tools; Streamline is left alone on purpose.
+  `dlls <game> restore` undoes it. NVIDIA publishes the three files in its
+  own repository (tag `v310.9.1` at the time of writing, under
+  `lib/Windows_x86_64/rel/`); a zip of them next to the tools is picked up as
+  the newest source.
+* The neural-rendering runtime, `nvngx_dlssnr.dll`, is not in any SDK and
+  not shipped here. Know which build you have by hash: the NVIDIA-signed 310.8
+  for RTX 50 is `e16bcf15...`, ShortFuse's cross-generation build for RTX
+  20/30/40 is `e67dee20...`, and a widely copied patched build `8270b350...`
+  carries NVIDIA's signature over different content. `vklayer status` and
+  `verify --vklayer` name the one the helper loads.
 * The feeder pin is DLSS5-Feeder 0.14.0-beta.5 (Dreamfall Chapters, D3D11, VORT
   vectors, classic RenoDX add-on); v0.12.0 is kept as the previous known-good.
+  0.15.1 (PQ bridge for HDR10 D3D11 swapchains, OptiScaler accepted as a feed
+  consumer) is the next candidate once it has had one Dreamfall run.
 * `scan_updates.py` lists what moved upstream across every project this
-  depends on. Run it before moving a pin; test a new build on one game first.
+  depends on, DLSS5VKLayer included. Run it before moving a pin; test a new
+  build on one game first.
 
 ## Layout
 
@@ -75,6 +107,7 @@ dlss5-linux/            the port: core/ (vendored upstream), linuxport/, CLI, GU
 proton-tool/            the standalone tool the port delegates Proton work to
 mv-providers/vort/      VORT motion-vector shader (MIT) for the feeder route
 examples/ffxiv/         one-shot FFXIV setup under XIVLauncher-RB + the ini keys
+examples/vklayer/       the out-of-process route: install, launch token, controls, caveats
 scan_updates.py         upstream release watcher
 FINDINGS.md             what was learned, per route and per failure
 ```
@@ -82,5 +115,6 @@ FINDINGS.md             what was learned, per route and per failure
 ## Credits
 
 DLSS5-Autopilot (Kizzuwatnaa), OptiScaler and the DLSS-NR forks (Dagherbou,
-y4my4my4m), DLSS5-Feeder (jlrouzies-fr), RenoDX (clshortfuse), the RHI build
-catalogue (RankFTW), vort_Shaders (vortigern11), dxvk-nvapi and vkd3d-proton.
+y4my4my4m, wilsjo2, SirenBrink), DLSS5-Feeder (jlrouzies-fr), DLSS5VKLayer
+(bmitch87), RenoDX (clshortfuse), the RHI build catalogue (RankFTW),
+vort_Shaders (vortigern11), dxvk-nvapi and vkd3d-proton.

@@ -29,6 +29,9 @@ def run(g) -> list[tuple[str, str, str]]:
     out: list[tuple[str, str, str]] = []
     rep = diagnose.analyse(root)
     out.append(("INFO", "route", rep.route or "(no manifest)"))
+    if not rep.route and any((root / n).is_file() for n in ("ReShade.log", "OptiScaler.log", "dlss5-feed.log")):
+        out.append(("WARN", "stale logs", "no in-process payload is installed here; the add-on lines below come from logs "
+                    "an earlier route left behind (restore keeps them). The vk layer section, if any, is current."))
     seen: set[tuple[str, str]] = set()
     for f in rep.findings:                     # upstream re-registers per device; dedupe
         key = (f.title, f.detail)
@@ -142,5 +145,15 @@ def run(g) -> list[tuple[str, str, str]]:
                                 " -- the provider is not feeding (ReshadeMotionEstimation does not compile on D3D12 here; use VORT)")))
                 if re.search(r"CreateFeature raised", feed) and (g.api or "").upper() == "DX12":
                     out.append(("BAD", "feeder on D3D12", "the same-device create faults under Proton in most launches "
-                                "(vkd3d-proton, via the DLSS cubin path); no config fixes it -- see the findings"))
+                                "(vkd3d-proton, via the DLSS cubin path); no config fixes it -- see the findings; "
+                                "the DLSS5VKLayer route works on this class of game (verify --vklayer)"))
+                probes = re.findall(r"Depth probe .*", feed)
+                if probes and "FLAT" in probes[-1]:
+                    out.append(("WARN", "depth", "the last depth probe was flat while the scene moved -- ReShade's Generic "
+                                "Depth is on the wrong buffer (Add-ons tab > Generic Depth); DLSS and NR get no depth"))
+
+    # --- the out-of-process route, when its token is in the launch options ---
+    from . import vklayer
+    if vklayer.enabled_in(cur) or (rep.route in (None, "", "(no manifest)") and vklayer.installed()):
+        out.extend(vklayer.verify(g))
     return out

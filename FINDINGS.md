@@ -62,7 +62,8 @@ September 2026. Dates matter: the projects involved ship several times a day.
   report DLSS unavailable, so that path cannot be avoided. When the create did
   succeed, no add-on build drew a visible NR frame on the R10G10B10A2 PQ
   backbuffer, and feeder 0.14.0-beta.4's own feed came out black there where
-  0.12.0's was visible.
+  0.12.0's was visible. **The out-of-process route below runs this game**:
+  the model never touches the game's device, so the fault is not on the path.
 * ReshadeMotionEstimation does not compile on ReShade's D3D12 backend
   (`error X3020: cannot sample from texture that is also used as render target`);
   VORT (`DLSS5_MV_PROVIDER=2`) does and feeds real vectors.
@@ -100,4 +101,117 @@ the add-ons' hook miss on it is baseline, not a fault.
 ## Cyberpunk 2077 (GOG, RED4ext + CET + redscript)
 
 OptiScaler livelocks the game thread on the mod stack; no DLSS feature is
-created. Not a Proton problem as such; parked.
+created. Not a Proton problem as such; parked. Untested on the out-of-process
+route, which does not enter the process at all.
+
+## The out-of-process route: DLSS5VKLayer (2026-09-10/11)
+
+* **What it is.** A Linux Vulkan implicit layer (`VK_LAYER_NV_dlssnr`, 64 and
+  32-bit) captures the presented swapchain image and hands it over shared
+  memory to a separate Windows helper (`dlssnr_helper.exe`) running under a
+  Proton runner picked from `compatibilitytools.d`. The helper drives
+  `nvngx_dlssnr.dll` through its Vulkan NGX exports, synthesises motion
+  vectors with `VK_NV_optical_flow`, passes zero depth, composes with a
+  RenoDX-derived shader and returns the frame. One launch token,
+  `VKLayer_DLSS5=1`, and nothing in the game folder.
+* **It works on FF7 Remake**, the D3D12-without-DLSS title every in-process
+  route failed on: 4,531 frames through the model in one session, feature 18
+  created on the snippet path in 78 ms, a visible effect, no fault, clean
+  exit. It also runs under a 615.71 driver. Anything that presents through
+  Vulkan is reachable, DXVK and vkd3d-proton alike, and it is the only route
+  that reaches native Linux games.
+* **What it costs.** Post-present: the HUD gets the model too. Synthetic
+  vectors and no depth, so a game with its own DLSS is still better served by
+  OptiScaler (real vectors, real depth, before the UI, integrated with the
+  upscaler). No upscaling. One copy each way per frame at display resolution.
+* **Three findings, none of them ours to fix.**
+  1. On an HDR10 (PQ10) swapchain the layer rebuilt its whole composition
+     every frame: the early-return compare in `Prepare()` tests the raw PQ
+     transfer flag against a value it stores normalised to zero whenever the
+     proxy is 8-bit, so it never matches. One line. Play in SDR until it is
+     fixed; `verify --vklayer` counts the rebuilds.
+  2. The float16 HDR proxy never engages on this runtime: the helper gates it
+     on `NVSDK_NGX_VULKAN_GetFeatureRequirements` reporting HDR capability,
+     and that query returns `0xbad00005` here, so the model was created SDR
+     and saw PQ code values as an 8-bit picture.
+  3. Zero-copy dma-buf cannot engage under a Wine runner: the helper needs
+     `VK_EXT_external_memory_dma_buf` + `VK_KHR_external_memory_fd` on the
+     Wine-side device, and winevulkan does not expose the fd-based
+     external-memory extensions. The shared-memory transport is what runs;
+     `ptrace_scope` is irrelevant on that path.
+* **Expected, not faults.** The "core" NGX init and its parameter allocator
+  answer `0xbad00002`; the snippet route is the one that works. The
+  `[param-miss] DLSSNR.*Subrect*` lines are the DLL probing optional inputs.
+* **Controls.** There is no overlay because nothing runs inside the game.
+  `dlssnr-gui` (live, next frame; profiles; split-screen compare; frame
+  hold; debug views), `dlssnr-shmctl <shm> set|toggle`, and an evdev toggle
+  hotkey (`DLSSNR_TOGGLE_KEY=F10`; your user in the `input` group). Closing
+  the GUI stops the helper, and the helper must be up before the game.
+* **Not done.** Per-frame cost (needs `DLSSNR_TIME=1` on both ends), SDR-mode
+  run without finding 1, native Linux titles, Cyberpunk with its mod stack.
+
+## Neural-rendering runtime builds, by hash
+
+`nvngx_dlssnr.dll` is not in any SDK. Three builds circulate; know which you
+have (`sha256sum`), because a helper or add-on does not tell you:
+
+| sha256 (prefix) | what it is |
+|---|---|
+| `e16bcf15e16e13f5` | NVIDIA-signed 310.8 for RTX 50; the content digest matches its Authenticode signature |
+| `e67dee209320cdaf` | ShortFuse cross-generation 310.8 for RTX 20/30/40 (FP16 path on 20/30, Ada path on 40, RTX 50 unchanged) |
+| `8270b350cd82de5c` | a patched 310.8.0: NVIDIA's signature over different content; works, measured at the same cost, but not the file to hand a helper |
+
+## Driver 615.71.09 (2026-09-10)
+
+The Linux driver moved from 610.57 to 615.71 under us. Windows reports on
+the 616.64+ branch say the driver routes NR through its own runtime there
+and every renodx-dlss5 add-on build faults on evaluate. On Linux 615.71:
+OptiScaler on FF7 Rebirth unchanged (dlss: true, NR 5.8 ms median), the
+feeder + classic add-on on Dreamfall unchanged, the VK layer runs. Neither
+driver ships `nvngx_dlssnr.dll`; the runtime always came from the community
+archive. A `GetDriverStore ... -3FFFFFFE` warning in OptiScaler.log is a
+Windows registry query that cannot succeed under Wine; harmless.
+
+## DLSS5-Feeder 0.15.x and 1.16 (2026-09-09/10)
+
+* 0.15.1 adds `hdr_bridge`: on a PQ BT.2020 swapchain the frame is decoded
+  to linear FP16 on the way in and re-encoded on the way out, and the add-on
+  asks ReShade for the colour space instead of guessing from the format. This
+  is the mechanism behind "NR black or wrecked highlights on a 10-bit PQ
+  backbuffer". D3D11 64-bit only, so it does not reach the D3D12 titles
+  where we saw it.
+* 0.15.0 accepts the OptiScaler DLSS-NR fork as a third feed consumer
+  (installed as `winmm.dll`; the SuperSampling probe flips to min-arch 0x0
+  when OptiScaler answers), fixes feature-level-10 shader creation and sRGB
+  `work_resolution`, and makes RenoDX the default consumer.
+* 1.16.0-beta.1: `DLSS5_FEED_D3D12_DEBUG=1` names D3D12 resource-state
+  transitions (useful for a DRED capture of the Remake fault); a 1500 ms
+  grace on the first NGX call for OptiScaler; `OutOfDate` text names 616.56
+  as the minimum driver in Windows numbering.
+
+## Other OptiScaler lines (standing as of 2026-09-11)
+
+* **wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass** (NR before super resolution,
+  1-3 passes, RTX 50 NVFP4 hybrid, RTX 20/30 MFG) branches from Dagherbou's
+  09-03 tip, not from y4my4m, so none of the vkd3d-proton overlay/device
+  fixes that ended the v0.2.x deadlock are in it. Its "submission epoch" gate
+  never advances under vkd3d-proton on Cyberpunk 2077 (open issue #24: the
+  DXGI swapchain wrapper is created on the 09-03 build and not on v0.7.5+,
+  a regression between those builds). Not a pin candidate until that closes.
+* **SirenBrink/..._FFXIV** v1.x/v2.0 is the wilsjo2 line plus FFXIV patches
+  (forced quality, live quality change, FG resize, split-jitter fix). The
+  command-list pass gate we root-caused for FFXIV's multipass flashing no
+  longer exists in that code; its own status doc says the flicker cause was
+  never established. An FFXIV-only experiment.
+* **y4my4my4m** has not moved since 7b7220bb; the `nightly` tag rebuilds
+  daily with "No changes" and keeps its dated assets, so the pinned
+  20260906 archive stays downloadable.
+
+## DLSS5-Autopilot 1.7.2 to 1.8.1
+
+Upstream shipped four releases in four days after the core vendored here
+(1.7.1): a library cache, Windows crash-record reading, an aim-for-fps
+autotuner, NVIDIA-sourced SR/RR/FG runtimes, the wilsjo2 build as a third
+OptiScaler choice, and the driver-fault verdict for 616.64+. The shim targets
+still exist; `gpu.driver_at_least` gained a `have` parameter that the Linux
+replacement must accept before a re-vendor. Not synced yet.

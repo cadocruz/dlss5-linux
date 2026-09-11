@@ -97,6 +97,10 @@ def report(g: games.Game, sm: int | None) -> None:
         print(f"   {mark} {r:<11} {lvl:<12} {note[:70]}")
     opt = installer.Options(path=s.recommended, native_dlss=s.native_dlss, upscaler=s.upscaler)
     print(f"  plan      {' -> '.join(installer.plan(g, opt))}")
+    from linuxport import vklayer
+    hint = vklayer.suggestion(g, s.native_dlss)
+    if hint:
+        print(f"  vk layer  {hint}")
 
 
 def options_from(args, s) -> installer.Options:
@@ -175,7 +179,11 @@ def cmd_verify(args) -> int:
     g = find(args.target, getattr(args, 'prefix', None))
     print(f"\n{g.name}\n{'-' * 60}")
     bad = 0
-    for lvl, title, detail in verify.run(g):
+    rows = verify.run(g)
+    if getattr(args, "vklayer", False) and not any(t == "vk layer" for _, t, _ in rows):
+        from linuxport import vklayer
+        rows += vklayer.verify(g)
+    for lvl, title, detail in rows:
         mark = {"OK": "ok  ", "BAD": "FAIL", "WARN": "warn", "INFO": "    "}.get(lvl, lvl[:4])
         bad += lvl == "BAD"
         print(f"  [{mark}] {title:<18} {detail[:150]}")
@@ -186,6 +194,31 @@ def cmd_launch_options(args) -> int:
     from linuxport import proton
     from core import diagnose
     g = find(args.target, getattr(args, 'prefix', None))
+    ind = True if args.indicator else (False if args.no_indicator else None)
+    if getattr(args, "vklayer", False) or getattr(args, "no_vklayer", False):
+        # The out-of-process route: one token, nothing else touched.
+        from linuxport import vklayer
+        on = bool(args.vklayer)
+        cur = proton.current_launch_options(g)
+        line = vklayer.launch_line(g, on, ind)
+        print(f"\n{g.name}  appid={proton.appid_for(g) or '-'}  (vk layer {'on' if on else 'off'})")
+        print(f"  current : {cur or '(none)'}")
+        print(f"  steam > properties > launch options:\n    {line}")
+        stale = vklayer.stale_overrides(g)
+        if stale and on:
+            print(f'  note    : WINEDLLOVERRIDES="{stale}" is still there with no in-process payload; harmless')
+        if on:
+            print(f"  helper  : {'running' if vklayer.helper_running() else 'not running -- dlssnr-helper start before the game'}"
+                  + ("" if vklayer.installed() else f"   !! layer not installed: {vklayer.UPSTREAM}"))
+            for c in vklayer.CONTROLS[:1]:
+                print(f"  note    : {c}")
+        if args.apply:
+            try:
+                backup = proton.set_launch_options(g, line)
+            except RuntimeError as e:
+                sys.exit(f"  not applied: {e}")
+            print(f"  applied. backup: {backup}")
+        return 0
     proxy = args.proxy or proton.installed_proxy(g) or "dxgi.dll"
     route = (diagnose._manifest(g.install_dir) or {}).get("path")
     xl = proton.is_xlcore(g)
@@ -232,6 +265,30 @@ def cmd_dlls(args) -> int:
     return subprocess.run(cmd).returncode
 
 
+def cmd_vklayer(args) -> int:
+    """The out-of-process route's own state: install, helper, runtime, live counters, controls."""
+    from linuxport import vklayer
+    print(f"\nDLSS5VKLayer\n{'-' * 60}")
+    m = vklayer.manifest()
+    print(f"  layer     {'installed: ' + str(m) if m else 'not installed -- ' + vklayer.UPSTREAM + ' (examples/vklayer)'}")
+    print(f"  helper    {vklayer.helper_exe() or 'dlssnr-helper not on PATH'}   {'running' if vklayer.helper_running() else 'stopped'}")
+    digest, label = vklayer.runtime()
+    print(f"  runtime   {label}" + (f"   sha256 {digest[:16]}..." if digest else ""))
+    st = vklayer.shm_status()
+    if st:
+        print(f"  live      frames={st.get('layer_frames', '0')} answered={st.get('helper_frames', '0')} "
+              f"model_up={st.get('model_up', '0')} hdr_detected={st.get('hdr_detected', '0')} proxy_format={st.get('proxy_format', '?')}")
+    s = vklayer.shm_settings()
+    if s:
+        keys = ("enabled", "passes", "workingscale", "transfer", "mvec", "mvecquality", "hdrmode", "togglekey")
+        print("  settings  " + " ".join(f"{k}={s.get(k)}" for k in keys))
+    if args.action == "controls" or not st:
+        print("  controls:")
+        for c in vklayer.CONTROLS:
+            print(f"   - {c}")
+    return 0
+
+
 def cmd_uninstall(args) -> int:
     g = find(args.target, getattr(args, 'prefix', None))
     for line in installer.uninstall(g, on_log=lambda m: print("   " + m)):
@@ -254,6 +311,10 @@ def main() -> int:
         if name == "launch-options":
             sp.add_argument("--proxy", help="default: the proxy recorded for this game")
             sp.add_argument("--apply", action="store_true", help="write it: Steam's localconfig.vdf (Steam closed) or xivlauncher-rb's launcher.ini (launcher closed)")
+            sp.add_argument("--no-vklayer", action="store_true", help="remove the DLSS5VKLayer token")
+        if name in ("launch-options", "verify"):
+            sp.add_argument("--vklayer", action="store_true",
+                            help="the out-of-process DLSS5VKLayer route: add VKLayer_DLSS5=1 / read its helper and layer logs")
         if name in ("launch-options", "install"):
             sp.add_argument("--indicator", action="store_true", help="add PROTON_DLSS_INDICATOR=1 (on-screen DLSS/FG readout)")
             sp.add_argument("--no-indicator", action="store_true")
@@ -272,8 +333,12 @@ def main() -> int:
             sp.add_argument("--force-route", action="store_true", help="install a route the game does not list")
             sp.add_argument("--dry-run", action="store_true")
             sp.add_argument("-y", "--yes", action="store_true")
+    vk = sub.add_parser("vklayer", help="the out-of-process DLSS5VKLayer route: install state, helper, runtime, live counters")
+    vk.add_argument("action", nargs="?", default="status", choices=["status", "controls"])
     ap.add_argument("--scan", action="store_true")
     args = ap.parse_args()
+    if args.cmd == "vklayer":
+        return cmd_vklayer(args)
     if args.cmd == "install":
         return cmd_install(args)
     if args.cmd == "verify":
