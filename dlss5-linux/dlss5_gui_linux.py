@@ -220,8 +220,9 @@ class App(QtWidgets.QMainWindow):
             "build this tool pins) hooks the game's dlss, reports 'dlss: true' and runs neural rendering on it - "
             "directx 12 directly, directx 11 through its d3d12 bridge (final fantasy xiv). the native route is the "
             "alternative that leaves the game's dlss and frame generation untouched. games with no dlss: directx 11 "
-            "goes through the feeder (always dlaa, dreamfall works); directx 12 without dlss has no working route "
-            "under proton yet - the feeder's create faults in vkd3d. 32-bit, opengl and directx 9 often fail. "
+            "goes through the feeder (always dlaa, dreamfall works); directx 12 without dlss goes through the "
+            "dlss5vklayer route instead (the feeder's create faults in vkd3d; the layer runs the model beside the "
+            "game, nothing in the folder - ff7 remake works). 32-bit, opengl and directx 9 often fail. "
             "anti-cheat games: don't.", "dim"))
         v.addWidget(c2); v.addStretch(1)
         return w
@@ -349,7 +350,7 @@ class App(QtWidgets.QMainWindow):
             self.rows[key] = (l, widget, hint)
 
         self.cb_exe = QtWidgets.QComboBox(); row(0, "exe", "target exe", self.cb_exe, amber=True)
-        self.cb_route = QtWidgets.QComboBox(); self.cb_route.currentIndexChanged.connect(self._on_route); row(1, "route", "loads as", self.cb_route)
+        self.cb_route = QtWidgets.QComboBox(); self.cb_route.currentIndexChanged.connect(self._on_route); row(1, "route", "route", self.cb_route)
         self.routelbl = label("", "dim"); grid.addWidget(self.routelbl, 2, 0, 1, 3)
         self.cb_prov = QtWidgets.QComboBox(); self.cb_prov.addItems([v[0] for v in reshade_ini.PROVIDERS.values()]); row(3, "prov", "motion vectors", self.cb_prov)
         self.cb_proxy = QtWidgets.QComboBox(); self.cb_proxy.addItems(["auto - pick a free name"] + list(optiscaler.PROXY_NAMES)); row(4, "proxy", "loads as", self.cb_proxy)

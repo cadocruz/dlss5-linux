@@ -48,6 +48,35 @@ OptiScaler. `examples/vklayer/README.md` is the recipe; the port knows the
 route (`vklayer status`, `launch-options --vklayer`, `verify --vklayer`)
 without installing it, and names the neural-rendering runtime by hash.
 
+## Screenshots
+
+The port's wizard, three pages. Taken offscreen on the test machine with the
+library filtered to the titles this README reports on; drive labels in paths
+are shortened.
+
+![architecture page: what to install for](docs/screenshots/gui_1_architecture.png)
+
+Pick a game: source, architecture, renderer, the recommended route and its
+outlook, install state, and the detection evidence for the selected title.
+
+![game page: the library with route and outlook per game](docs/screenshots/gui_2_games.png)
+
+Install: route, proxy, add-on and runtime choices, the model-resolution dial,
+the OptiScaler build pin, and the launch-option check, with the reasoning in
+the log below.
+
+![install page for FINAL FANTASY VII REBIRTH](docs/screenshots/gui_3_install.png)
+
+"did it work?" reads the logs of the last run: capability, dispatches, the
+DLSS runtime the game loaded, neural-rendering cost, errors.
+
+![did it work? on FINAL FANTASY VII REBIRTH](docs/screenshots/gui_4_verify.png)
+
+The standalone tool's own window (`proton-tool/dlss5_gui.py`): mode, options,
+and a verify against the same game.
+
+![the standalone tool verifying FINAL FANTASY VII REBIRTH](docs/screenshots/tool_verify.png)
+
 ## Install
 
 Requirements: Python 3.11+, `PySide6` for the GUI, `7z` (p7zip) for the
