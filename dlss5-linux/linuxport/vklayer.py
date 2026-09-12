@@ -20,10 +20,12 @@ Why it is a route of its own here (measured 2026-09-10/11, RTX 5090, 615.71):
 Costs: post-present (the HUD gets the model too), synthetic vectors and no
 depth (a game WITH DLSS is still better served by OptiScaler, which keeps real
 vectors and depth and runs before the UI), no upscaling, one shared-memory
-copy each way per frame. Zero-copy dma-buf cannot engage under a Wine runner:
-winevulkan exposes no fd-based external-memory extension. Controls are
-out-of-process too (dlssnr-gui, dlssnr-shmctl, an evdev hotkey): there is no
-overlay, because nothing runs inside the game.
+copy each way per frame, with the present thread spinning on the answer
+(upstream #13: the GPU is never asked to wait, the CPU is, so utilisation has
+a ceiling). Zero-copy dma-buf cannot engage under a Wine runner: winevulkan
+exposes no fd-based external-memory extension. Controls are out-of-process
+too (dlssnr-gui, dlssnr-shmctl): there is no overlay, because nothing runs
+inside the game, and the hotkey is best left unbound (upstream #12).
 
 This module knows the install, reads its logs, writes the one launch token,
 and names the runtime by hash. It never installs the layer itself: the
@@ -74,8 +76,9 @@ CONTROLS = [
     "dlssnr-gui  -- every setting as a row (style, intensity, tone, structure, passes, working scale, HDR mode, "
     "white point, motion quality), profiles, split-screen compare, frame hold, debug views. Closing it stops the helper.",
     f"dlssnr-shmctl {SHM} settings | set <key> <value> | toggle enabled   -- the same from a shell",
-    "toggle hotkey: DLSSNR_TOGGLE_KEY=F10 in the launch options (evdev: your user must be in the 'input' group), "
-    "or 'Toggle key' in the GUI",
+    "toggle hotkey: leave it unset. Binding one arms an evdev rescan that re-opens every "
+    "/dev/input node once a second ON THE PRESENT THREAD -- 122 ms of stall per second measured here "
+    "(upstream issue #12). Toggle from the GUI or shmctl instead until that is fixed.",
     "A/B without a second run: set compare 1 (split screen) or hold 1 (freeze the model's input)",
 ]
 
@@ -229,6 +232,10 @@ def verify(g) -> list[tuple[str, str, str]]:
                         "the helper only builds the float proxy when GetFeatureRequirements reports HDR, "
                         "and that query fails on this runtime (upstream). Play in SDR for now." if proxy == "8-bit" else "")))
     st_set = shm_settings()
+    if st_set and st_set.get("togglekey", "0") != "0":
+        out.append(("WARN", "toggle hotkey", f"togglekey={st_set.get('togglekey')} arms an evdev rescan on the present "
+                    "thread once a second (every /dev/input node re-opened; 122 ms measured here). Set it to 0 and "
+                    "toggle from the GUI or shmctl -- upstream #12"))
     if st_set:
         out.append(("INFO", "settings", f"enabled={st_set.get('enabled')} passes={st_set.get('passes')} "
                     f"workingscale={st_set.get('workingscale')} transfer={st_set.get('transfer')} "

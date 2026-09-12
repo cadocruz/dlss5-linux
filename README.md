@@ -46,7 +46,10 @@ route costs: synthetic motion vectors from optical flow, no depth, the HUD
 included, no upscaling. A game with its own DLSS is still better served by
 OptiScaler. `examples/vklayer/README.md` is the recipe; the port knows the
 route (`vklayer status`, `launch-options --vklayer`, `verify --vklayer`)
-without installing it, and names the neural-rendering runtime by hash.
+without installing it, and names the neural-rendering runtime by hash. Run
+0.3.0-1 or newer (older builds hang the GPU on a 1x1 probe swapchain), and
+leave its toggle hotkey unbound: both of those, and the present-thread spin
+that caps GPU utilisation, are in `FINDINGS.md`.
 
 ## Screenshots
 

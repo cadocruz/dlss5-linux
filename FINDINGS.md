@@ -104,7 +104,7 @@ OptiScaler livelocks the game thread on the mod stack; no DLSS feature is
 created. Not a Proton problem as such; parked. Untested on the out-of-process
 route, which does not enter the process at all.
 
-## The out-of-process route: DLSS5VKLayer (2026-09-10/11)
+## The out-of-process route: DLSS5VKLayer (2026-09-10/12)
 
 * **What it is.** A Linux Vulkan implicit layer (`VK_LAYER_NV_dlssnr`, 64 and
   32-bit) captures the presented swapchain image and hands it over shared
@@ -124,7 +124,13 @@ route, which does not enter the process at all.
   vectors and no depth, so a game with its own DLSS is still better served by
   OptiScaler (real vectors, real depth, before the UI, integrated with the
   upscaler). No upscaling. One copy each way per frame at display resolution.
-* **Three findings, none of them ours to fix.**
+* **Versions move fast.** 0.3.0-1 (2026-09-12) is the floor worth running:
+  0.2.6-3 refuses frames below 64x64 after a 1x1 probe swapchain was found to
+  build a model and hang the GPU (Xid 109) on the first submit, killing the
+  game with it; 0.3.0 adds SDR quality controls, a raw-composition bypass, and
+  raises the multipass ceiling to 30 with a fast-pass mode on by default.
+* **Three findings from our own runs, none of them ours to fix, all still
+  present in 0.3.0-1.**
   1. On an HDR10 (PQ10) swapchain the layer rebuilt its whole composition
      every frame: the early-return compare in `Prepare()` tests the raw PQ
      transfer flag against a value it stores normalised to zero whenever the
@@ -144,11 +150,26 @@ route, which does not enter the process at all.
   `[param-miss] DLSSNR.*Subrect*` lines are the DLL probing optional inputs.
 * **Controls.** There is no overlay because nothing runs inside the game.
   `dlssnr-gui` (live, next frame; profiles; split-screen compare; frame
-  hold; debug views), `dlssnr-shmctl <shm> set|toggle`, and an evdev toggle
-  hotkey (`DLSSNR_TOGGLE_KEY=F10`; your user in the `input` group). Closing
-  the GUI stops the helper, and the helper must be up before the game.
-* **Not done.** Per-frame cost (needs `DLSSNR_TIME=1` on both ends), SDR-mode
-  run without finding 1, native Linux titles, Cyberpunk with its mod stack.
+  hold; debug views) and `dlssnr-shmctl <shm> set|toggle`. Closing the GUI
+  stops the helper, and the helper must be up before the game. **Do not bind
+  the toggle hotkey**: see below.
+* **Two costs found by another reporter on the same hardware** (RTX 5090,
+  CachyOS, 615.71), both open upstream on 0.3.0-1:
+  * *The present thread waits for the helper in a spin/poll loop* (2 ms of
+    spinning, then 200 µs sleeps). No fence or semaphore takes part, so the
+    GPU is never asked to wait and the queue drains while the CPU does: GPU
+    utilisation has a ceiling that disappears the moment the model is
+    switched off. Measured at 4K: ~8.7 ms of wait against ~2.0 ms of real
+    helper GPU work (issue #13). This is the route's headline cost on a fast
+    card, and it is why an in-process route still wins where one exists.
+  * *Binding the toggle hotkey stalls the present thread* ~122 ms once a
+    second: the evdev backend re-enumerates every `/dev/input` node inline on
+    that thread, and closing an evdev node costs 4-16 ms in the kernel. It
+    runs whether or not neural rendering is enabled, and reproduces with
+    `vkcube` (issue #12). Reproduced here: 16 nodes, 122 ms per rescan. Leave
+    the key unset (it persists as `set_toggle_key` in the helper's config).
+* **Not done.** Per-frame cost from our own instrumentation, an SDR-mode run
+  without finding 1, native Linux titles, Cyberpunk with its mod stack.
 
 ## Neural-rendering runtime builds, by hash
 
