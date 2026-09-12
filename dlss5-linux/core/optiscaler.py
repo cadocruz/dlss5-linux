@@ -43,13 +43,55 @@ release page and never bundled here, like every other component.
 """
 from __future__ import annotations
 
+import os
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
 from . import net, sources
 
 API = "https://api.github.com/repos/Dagherbou/OptiScaler_DLSSNR/releases/latest"
+
+# y4my4my4m's fork of the same build: multi-frame generation on RTX 40
+# and its own neural-pass changes, published as development builds in .7z
+# archives (issue #21). Windows' own tar.exe (bsdtar, Windows 10 1803 and later)
+# unpacks 7z, so nothing is bundled for it.
+FORK_API = ("https://api.github.com/repos/y4my4my4m/"
+            "OptiScaler_DLSSNR_Multipass_MFG/releases?per_page=10")
+FORK = "y4my4my4m"
+
+# wilsjo2's fork runs the neural pass BEFORE super resolution instead of
+# after it, over one to three passes (Passes= in OptiScaler.ini) - the
+# ordering the neural-upstream route gets on the ReShade side, on the
+# OptiScaler side (issue #76). Requested with one game measured, so it is
+# offered and labelled as that, never chosen automatically.
+PRESR_API = ("https://api.github.com/repos/wilsjo2/"
+             "OptiScaler-DLSSNR-PreSR-Multipass/releases?per_page=10")
+PRESR = "wilsjo2"
+# The key that fork's "before the upscaler" placement lives behind. It is
+# off by default there, so choosing the build is not the same as choosing
+# the behaviour it is chosen for (#81). Named here rather than written in
+# the GUI's settings dict: it belongs to the build, not to a preference.
+PRESR_BEFORE_SR = {"RunBeforeSR": True}
+
+# Every fork publishes on its own release page, in the same shape: pick the
+# newest release that carries an archive. The second item names archives to
+# pass over.
+FORKS = {
+    # "_with_DLSS" carries DLSS 310 and Streamline as well; the game's own
+    # copies (or this tool's) stay.
+    FORK: (FORK_API, ("with_dlss",)),
+    PRESR: (PRESR_API, ()),
+}
+
+# Key -> dropdown label. "" is the build the route installs by default.
+BUILDS = {
+    "": "Dagherbou's DLSS-NR build  -  the release page's latest",
+    FORK: "y4my4my4m's fork  -  multi-frame generation on RTX 40, development builds",
+    PRESR: "wilsjo2's fork  -  neural rendering before the upscaler, "
+           "1-3 passes; not run here",
+}
 
 # Insert opens OptiScaler's own overlay (0x2D / VK_INSERT).
 OVERLAY_KEY = "Insert"
@@ -81,22 +123,164 @@ PROXY_HELP = {
 LEGACY_FILES = ("nvapi64.dll", "nvngx.dll", "OptiScaler.asi",
                 "Remove OptiScaler.bat", "Remove_OptiScaler.bat")
 
+# Debug symbols and import libraries the fork's archive carries; a game
+# folder has no use for them.
+SKIP_SUFFIXES = {".pdb", ".exp", ".lib"}
+
 # The setup scripts do by hand what this tool does itself.
 SKIP = {"setup_windows.bat", "setup_linux.sh"}
 
 
-def resolve() -> tuple[str, str]:
-    """(tag, zip url) of the latest OptiScaler + DLSS-NR build.
+def resolve(build: str = "") -> tuple[str, str]:
+    """(tag, archive url) of the newest OptiScaler + DLSS-NR build.
 
-    Goes through the shared cached fetcher, so this route survives GitHub's
-    anonymous rate limit the same way every other component does - a stale
-    cached answer beats refusing to install.
+    `build` is a key of BUILDS. Goes through the shared cached fetcher, so
+    this route survives GitHub's anonymous rate limit the same way every
+    other component does - a stale cached answer beats refusing to install.
     """
+    if build in FORKS:
+        api, skip_names = FORKS[build]
+        rels = sources._json(api)
+        rels = [r for r in (rels if isinstance(rels, list) else [])
+                if not r.get("draft") and r.get("tag_name") != "nightly"]
+        # GitHub orders by creation time and a fork's releases share one; the
+        # "nightly" tag never changes, so its archive would be cached once
+        # under that name and never refreshed.
+        rels.sort(key=lambda r: r.get("published_at") or "", reverse=True)
+        for rel in rels:
+            for a in rel.get("assets", []):
+                low = a["name"].lower()
+                if low.endswith((".7z", ".zip")) \
+                        and not any(x in low for x in skip_names):
+                    return rel.get("tag_name", "?"), a["browser_download_url"]
+        raise RuntimeError(f"{build}'s OptiScaler fork has no release with "
+                           f"a .7z or .zip archive.")
+    if build:
+        raise ValueError(f"unknown OptiScaler build {build!r}")
     rel = sources._json(API)
     for a in rel.get("assets", []):
-        if a["name"].lower().endswith(".zip"):
+        if a["name"].lower().endswith((".zip", ".7z")):
             return rel.get("tag_name", "?"), a["browser_download_url"]
     raise RuntimeError("The OptiScaler DLSS-NR release has no .zip asset.")
+
+
+def archive_name(build: str = "") -> str:
+    """The archive this build would install, from the cache alone, or "".
+
+    The preview needs to know which package it is about to describe without
+    making a request: two forks publish archives whose names start the same
+    way, so a cache holding both cannot be told apart by pattern.
+    """
+    api = FORKS[build][0] if build in FORKS else API
+    data = sources.cached_json(api)
+    rels = data if isinstance(data, list) else [data] if data else []
+    rels = [r for r in rels if isinstance(r, dict) and not r.get("draft")
+            and r.get("tag_name") != "nightly"]
+    rels.sort(key=lambda r: r.get("published_at") or "", reverse=True)
+    skip = FORKS[build][1] if build in FORKS else ()
+    for rel in rels:
+        for a in rel.get("assets", []):
+            low = a.get("name", "").lower()
+            if low.endswith((".7z", ".zip")) and not any(x in low for x in skip):
+                # The name it is cached under, which is built from the tag -
+                # not the asset's own name, which can be anything.
+                return _archive_name(rel.get("tag_name", "?"),
+                                     a["browser_download_url"])
+    return ""
+
+
+def _tar_exe() -> Path:
+    return Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "tar.exe"
+
+
+def _seven_zip() -> Path | None:
+    """7-Zip, if this machine has it. Issue #93.
+
+    Windows ships tar.exe (bsdtar) from 1803 on, and this tool used it for
+    .7z - but Microsoft's build has no LZMA in it, so on some machines it
+    unpacks nothing and says "LZMA codec is unsupported". Whether it works
+    is a property of the Windows build, which is not something a person can
+    be asked about, so try the real thing first where it exists.
+    """
+    for c in (shutil.which("7z"), shutil.which("7za"), shutil.which("7zr"),
+              r"C:\Program Files\7-Zip\7z.exe",
+              r"C:\Program Files (x86)\7-Zip\7z.exe"):
+        if c and Path(c).is_file():
+            return Path(c)
+    return None
+
+
+def extract_7z(archive: Path, dest: Path) -> None:
+    """Unpack a .7z into dest: 7-Zip if it is here, else Windows' tar.exe."""
+    dest.mkdir(parents=True, exist_ok=True)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    sz = _seven_zip()
+    if sz is not None:
+        r = subprocess.run([str(sz), "x", str(archive), f"-o{dest}", "-y"],
+                           capture_output=True, text=True, creationflags=flags)
+        if r.returncode == 0:
+            return
+        seven_err = (r.stderr or r.stdout).strip()[-300:]
+    else:
+        seven_err = ""
+
+    tar = _tar_exe()
+    if not tar.is_file():
+        raise RuntimeError(
+            f"{archive.name} is a .7z archive and there is nothing here to "
+            f"open it: no 7-Zip, and this Windows has no tar.exe either "
+            f"(Windows 10 1803 and later ship one at {tar}). Install 7-Zip "
+            f"and run the install again."
+            + (f"\n\n7-Zip said: {seven_err}" if seven_err else ""))
+    r = subprocess.run([str(tar), "-xf", str(archive), "-C", str(dest)],
+                       capture_output=True, text=True, creationflags=flags)
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout).strip()[-300:]
+        hint = ""
+        if "lzma" in err.lower() or "unsupported" in err.lower():
+            # The exact failure #93 reported, and the answer is not obvious
+            # from the message Windows gives.
+            hint = ("\n\nWindows' own tar.exe is built without LZMA, so it "
+                    "cannot open a .7z on this machine. Install 7-Zip "
+                    "(7-zip.org) and run the install again - it is used "
+                    "first when it is there.")
+        raise RuntimeError(f"tar.exe could not unpack {archive.name}: "
+                           f"{err}{hint}")
+
+
+def _unpacked(archive: Path) -> Path:
+    """The archive's files in a folder under the cache, unpacked once."""
+    out = net.cache_dir() / "unpacked" / archive.stem
+    if out.is_dir() and any(out.iterdir()):
+        return _top(out)
+    # Into a side folder first: an extraction that dies half-way must not
+    # be taken for a complete one on the next install.
+    tmp = out.with_name(out.name + ".part")
+    shutil.rmtree(tmp, ignore_errors=True)
+    shutil.rmtree(out, ignore_errors=True)
+    if archive.suffix.lower() == ".7z":
+        extract_7z(archive, tmp)
+    else:
+        tmp.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive) as arc:
+            arc.extractall(tmp)
+    tmp.rename(out)
+    return _top(out)
+
+
+def _top(root: Path) -> Path:
+    """The folder holding the files: an archive wrapped in one directory
+    is unwrapped, so OptiScaler.dll is found where the proxy rename looks."""
+    entries = list(root.iterdir())
+    if len(entries) == 1 and entries[0].is_dir():
+        return entries[0]
+    return root
+
+
+def _archive_name(tag: str, url: str) -> str:
+    ext = ".7z" if url.lower().endswith(".7z") else ".zip"
+    return f"OptiScaler-DLSSNR-{tag}{ext}"
 
 
 def is_optiscaler(path: Path) -> bool:
@@ -198,22 +382,20 @@ def install(exe_dir: Path, proxy: str = DEFAULT_PROXY, dl=None, log=None,
 
     tag, url = release if release else resolve()
     log(f"      OptiScaler DLSS-NR {tag}")
-    z = dl(url, f"OptiScaler-DLSSNR-{tag}.zip")
+    z = dl(url, _archive_name(tag, url))
 
-    with zipfile.ZipFile(z) as arc:
-        for member in arc.namelist():
-            if member.endswith("/"):
-                continue
-            if Path(member).name in SKIP:
-                continue
-            # OptiScaler.dll has to carry whatever name the game will load.
-            rel = proxy if member == MAIN_DLL else member
-            target = exe_dir / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            _keep(target)          # someone may have a tuned OptiScaler.ini
-            with arc.open(member) as src, open(target, "wb") as out:
-                shutil.copyfileobj(src, out, 1 << 20)
-            written.append(rel.replace("\\", "/"))
+    src_root = _unpacked(z)
+    for src in sorted(p for p in src_root.rglob("*") if p.is_file()):
+        member = src.relative_to(src_root).as_posix()
+        if src.name in SKIP or src.suffix.lower() in SKIP_SUFFIXES:
+            continue
+        # OptiScaler.dll has to carry whatever name the game will load.
+        rel = proxy if member == MAIN_DLL else member
+        target = exe_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _keep(target)          # someone may have a tuned OptiScaler.ini
+        shutil.copyfile(src, target)
+        written.append(rel)
 
     log(f"      OptiScaler.dll installed as {proxy}")
     log(f"      {FORWARDER} placed - the model refuses calls from a module "
@@ -224,6 +406,19 @@ def install(exe_dir: Path, proxy: str = DEFAULT_PROXY, dl=None, log=None,
 # The fork's [DlssNr] section (Config.cpp reads it case-insensitively). Only
 # the handful worth a control are surfaced; the rest stay on the overlay.
 NR_SECTION = "DlssNr"
+# The diagnosis reads OptiScaler.log, and whether one exists is a setting
+# that differs between builds: y4my4my4m ships `LogToFile=auto`, which is
+# false, so a working install had no evidence at all and was answered "it
+# never loaded" (#110). Level 2 is Info - enough for the rules here, and
+# not the trace-level firehose that costs frames.
+LOG_SECTION = "Log"
+LOG_VALUES = {"LogToFile": "true", "LogLevel": "2"}
+# OptiScaler's own update check compares the fork's version with mainline
+# OptiScaler's releases, which have no neural rendering at all, and nags
+# "Update available: v0.9.4 (current 0.7.6)" - following it would remove
+# the very thing this route installs (#51).
+HOTFIX_SECTION = "Hotfix"
+HOTFIX_VALUES = {"CheckForUpdate": "false"}
 NR_PRESETS = {0: "Default", 1: "Preset 1", 2: "Preset 2", 3: "Preset 3"}
 NR_STYLES = {0: "Standard", 1: "Natural", 2: "Cinematic"}
 NR_SCALE_MIN, NR_SCALE_MAX = 25, 100
@@ -274,6 +469,42 @@ def _ini_set(text: str, section: str, values: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _ini_get(text: str, section: str, key: str) -> str | None:
+    """The value of `key` in `section`, or None when it is not there.
+
+    Case-insensitive on both names, the way OptiScaler reads its ini.
+    """
+    inside = False
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            inside = s[1:-1].lower() == section.lower()
+            continue
+        if not inside or not s or s[0] in ";#" or "=" not in s:
+            continue
+        k, v = s.split("=", 1)
+        if k.strip().lower() == key.lower():
+            return v.strip()
+    return None
+
+
+def _log_values(text: str) -> dict[str, str]:
+    """The [Log] keys to write: only what is needed to get a log at all.
+
+    enable_nr runs on every install and every autotune step. Forcing
+    LogLevel=2 each time undid a person who had set it (0 to save frames,
+    or a trace level for a bug report). LogToFile has to end up true - the
+    diagnosis has nothing to read otherwise (#110) - and LogLevel is only
+    given a value where there is none, or where the build left it on auto.
+    """
+    out: dict[str, str] = {}
+    if (_ini_get(text, LOG_SECTION, "LogToFile") or "").lower() != "true":
+        out["LogToFile"] = LOG_VALUES["LogToFile"]
+    if (_ini_get(text, LOG_SECTION, "LogLevel") or "auto").lower() == "auto":
+        out["LogLevel"] = LOG_VALUES["LogLevel"]
+    return out
+
+
 def _fmt(v) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
@@ -299,10 +530,26 @@ def enable_nr(exe_dir: Path, log=None, settings: dict | None = None) -> None:
         # An older release of this tool wrote the section in capitals. The
         # reader does not mind, but two spellings in one file are confusing.
         text = text.replace("[DLSSNR]", f"[{NR_SECTION}]")
-        p.write_text(_ini_set(text, NR_SECTION, values), encoding="utf8")
+        text = _ini_set(text, NR_SECTION, values)
+        # Without this the diagnosis has nothing to read on the builds that
+        # default it off, and says the install never loaded (#110).
+        logv = _log_values(text)
+        if logv:
+            text = _ini_set(text, LOG_SECTION, logv)
+        text = _ini_set(text, HOTFIX_SECTION, dict(HOTFIX_VALUES))
+        p.write_text(text, encoding="utf8")
         log(f"      OptiScaler.ini: [{NR_SECTION}] "
             + ", ".join(f"{k}={v}" for k, v in values.items()))
-        log(f"      if it does not come on, press {OVERLAY_KEY} in game and "
+        if logv:
+            log(f"      OptiScaler.ini: [{LOG_SECTION}] "
+                + ", ".join(f"{k}={v}" for k, v in logv.items())
+                + " - 'did it work?' reads that log")
+        log(f"      OptiScaler.ini: [{HOTFIX_SECTION}] CheckForUpdate=false - "
+            f"its update notice compares with mainline OptiScaler, which "
+            f"has no neural rendering")
+        from . import reshade_ini
+        key = reshade_ini.overlay_key_name(OVERLAY_KEY)
+        log(f"      if it does not come on, press {key} in game and "
             f"tick it under DLSS Neural Rendering")
     except OSError:
         log("      could not write OptiScaler.ini")
@@ -322,6 +569,26 @@ FG_VALUES = {"Enabled": "true", "FGInput": "upscaler", "FGOutput": "fsrfg"}
 FG_HUD = {"HUDFix": "true"}
 FG_LIBS = ("OptiScaler/amd_fidelityfx_loader_dx12.dll",
            "OptiScaler/amd_fidelityfx_framegeneration_dx12.dll")
+
+
+def set_overlay_key(exe_dir: Path, vk: int, log=None) -> None:
+    """Bind OptiScaler's overlay to a virtual-key code ([Menu] ShortcutKey).
+
+    Its default is Insert, and a keyboard without one has no way into the
+    overlay at all - which is where neural rendering is switched on (#88).
+    The ini wants hex, and "auto" means the default.
+    """
+    if not vk:
+        return
+    log = log or (lambda *_: None)
+    p = exe_dir / INI
+    try:
+        text = p.read_text(encoding="utf8", errors="replace") if p.is_file() else ""
+        p.write_text(_ini_set(text, "Menu", {"ShortcutKey": f"0x{int(vk):02X}"}),
+                     encoding="utf8")
+        log(f"      OptiScaler.ini: [Menu] ShortcutKey=0x{int(vk):02X}")
+    except OSError:
+        log("      could not write the overlay key into OptiScaler.ini")
 
 
 def enable_fg(exe_dir: Path, log=None) -> bool:
@@ -466,6 +733,11 @@ def describe_nr(settings: dict | None) -> list[str]:
     st = settings.get("Style")
     if st:
         out.append(f"style: {NR_STYLES.get(int(st), st)}")
+    if settings.get("RunBeforeSR"):
+        out.append("the neural pass runs before super resolution, at render "
+                   "resolution - which is what this build is for. "
+                   f"OptiScaler.ini: [{NR_SECTION}] RunBeforeSR=true; turn "
+                   "it off there to put the pass back after the upscaler.")
     return out
 
 

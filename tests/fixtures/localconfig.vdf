@@ -1,0 +1,30 @@
+"UserLocalConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"apps"
+				{
+					"123"
+					{
+						"LaunchOptions"		"PROTON_LOG=1 %command%"
+						"cloud"
+						{
+							"last_sync_state"		"synchronized"
+						}
+					}
+					"456"
+					{
+						"cloud"
+						{
+							"last_sync_state"		"synchronized"
+						}
+					}
+				}
+			}
+		}
+	}
+}

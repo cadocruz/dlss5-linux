@@ -27,6 +27,7 @@ LABELS = {
     "renodx_sf":  "DLSS 5 add-on (renodx-dlss SF)",
     "dlssnr":     "nvngx_dlssnr",
     "dlss":       "nvngx_dlss",
+    "dlssd":      "nvngx_dlssd",
     "dlssg":      "nvngx_dlssg",
     "bridge":     "dlss5-bridge",
     "upstream":   "neural-upstream",
@@ -59,7 +60,7 @@ def _latest(name: str) -> str:
         latest = sources.resolve_feeder()[0]
     elif name == "remix_runtime":
         latest = sources.resolve_remix_runtime()[0]
-    elif name in ("renodx", "renodx_sf", "dlssnr", "dlss", "dlssg"):
+    elif name in ("renodx", "renodx_sf", "dlssnr", "dlss", "dlssg", "dlssd"):
         entries = sources.rhi_catalog().get(name) or []
         if entries:
             latest = entries[0]["label"]
@@ -134,6 +135,12 @@ def check(root: Path) -> list[Item]:
         # runtime is picked per card, so a newer label there is not "behind"
         # either.
         if name == "dlssnr":
+            outdated = False
+        elif name == "optiscaler" and man.get("opti_build"):
+            # A fork publishes its own numbers on its own release page;
+            # comparing them with Dagherbou's says nothing, and an
+            # "outdated" here would never clear - installing again puts the
+            # same fork back, because the manifest records which one.
             outdated = False
         elif name == "renodx":
             # The add-on is pinned on purpose in two cases, and the pin is

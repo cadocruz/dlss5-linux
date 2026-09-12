@@ -1,25 +1,46 @@
-"""XDG replacements for the five places core reads %LOCALAPPDATA%.
+"""XDG replacements for every place core derives a path from %LOCALAPPDATA%.
 
-Upstream keeps cache, prefs, its own log and the standalone-dlssnr log under
-%LOCALAPPDATA%\\dlss5-autopilot. On Linux those belong under XDG_CACHE_HOME
-and XDG_CONFIG_HOME. Patched at import so nothing downstream changes.
+Upstream keeps cache, prefs, profiles, the library cache, the GitHub API
+cache, its own log and the standalone-dlssnr log under
+%LOCALAPPDATA%\\dlss5-autopilot. On Linux those belong under XDG_CACHE_HOME,
+XDG_CONFIG_HOME and XDG_STATE_HOME. Patched at import so nothing downstream
+changes.
+
+Two of them (library.FILE, profiles.DIR) are computed from prefs.FILE at
+import time, so setting prefs.FILE alone leaves them pointing at the old
+place; they are set explicitly here. `tools/check_shims.py --windows` lists
+the modules that name LOCALAPPDATA; any new one belongs in install().
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-from core import diagnose, log, net, prefs
+from core import diagnose, library, log, net, prefs, profiles, sources
 
 APP = "dlss5-linux"
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / APP
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP
 STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / APP
+DATA = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / APP
+
+# Archives and add-ons the person keeps by hand (a nightly OptiScaler zip, a
+# renodx build, the DLSS runtime bundle). Replaces the old DLSS5_work/ folder
+# beside the tools, which existed on one machine only.
+COMPONENTS_ENV = "DLSS5_COMPONENTS_DIR"
+
+
+def components_dir() -> Path:
+    env = os.environ.get(COMPONENTS_ENV, "").strip()
+    return Path(env).expanduser() if env else DATA / "components"
 
 
 def install() -> None:
     net.CACHE = CACHE / "cache"
+    sources._API_CACHE = CACHE / "api-cache"
     prefs.FILE = CONFIG / "settings.json"
+    profiles.DIR = CONFIG / "profiles"
+    library.FILE = CONFIG / "library.json"
     log.DIR = STATE
     diagnose.STANDALONE_LOG = STATE / "standalone-dlssnr.log"
     for d in (net.CACHE, CONFIG, STATE):

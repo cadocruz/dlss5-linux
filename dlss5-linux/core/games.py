@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 import pathlib
 from pathlib import Path
@@ -199,15 +200,38 @@ def scan_steam() -> list[Game]:
             continue
         # appmanifest files carry the real display name
         names: dict[str, str] = {}
+        # Steam deletes a game's appmanifest when it is uninstalled and
+        # leaves the folder behind - saves, shader caches, config, sometimes
+        # nothing at all. On this machine that is 29 of 32 folders in one
+        # library, and every one of them used to be listed as a game the
+        # tool could install into. A manifest is the only cheap proof that
+        # the game is actually there.
+        installed: set[str] = set()
         try:
-            for acf in apps.glob("appmanifest_*.acf"):
-                t = acf.read_text(encoding="utf8", errors="replace")
-                nm = re.search(r'"name"\s*"([^"]+)"', t)
-                d = re.search(r'"installdir"\s*"([^"]+)"', t)
-                if nm and d:
-                    names[d.group(1).lower()] = nm.group(1)
+            manifests = list(apps.glob("appmanifest_*.acf"))
         except OSError:
-            pass
+            manifests = []
+        for acf in manifests:
+            # One unreadable manifest used to abort the whole loop, and now
+            # that the set decides what is shown, a file Steam happened to be
+            # rewriting would have hidden every game after it.
+            try:
+                t = acf.read_text(encoding="utf8", errors="replace")
+            except OSError:
+                continue
+            nm = re.search(r'"name"\s*"([^"]+)"', t)
+            d = re.search(r'"installdir"\s*"([^"]+)"', t)
+            # StateFlags carries 4 when the game is fully installed. One
+            # that is queued or still downloading has a manifest and a
+            # folder - Battlefield 6
+            # sat in the list as an empty folder with StateFlags 1042 - and
+            # there is nothing to install into until it is finished.
+            st = re.search(r'"StateFlags"\s*"(\d+)"', t)
+            done = bool(int(st.group(1)) & 4) if st else True
+            if d and done:
+                installed.add(d.group(1).lower())
+            if nm and d:
+                names[d.group(1).lower()] = nm.group(1)
         try:
             folders = [p for p in common.iterdir() if p.is_dir()]
         except OSError:
@@ -217,8 +241,32 @@ def scan_steam() -> list[Game]:
             if rp in seen:
                 continue
             seen.add(rp)
+            # No manifest: believe the folder only if it still has an
+            # executable of its own at the top level. That keeps a game
+            # whose manifest is missing for some other reason, and drops the
+            # leftovers, without walking into anything.
+            # ...and never hide a folder this tool has installed into, even
+            # when the game itself is gone: that is the one place someone
+            # needs the entry, to press uninstall and get the leftovers out.
+            if (f.name.lower() not in installed and not _has_exe(f)
+                    and not _marked(f)):
+                continue
             out.append(Game(name=names.get(f.name.lower(), f.name), folder=f, source="Steam"))
     return out
+
+
+def _has_exe(folder: Path, limit: int = 400) -> bool:
+    """Is there an .exe directly in this folder? One listing, capped."""
+    try:
+        with os.scandir(folder) as it:
+            for i, e in enumerate(it):
+                if i >= limit:
+                    return True     # a folder this full is not a leftover
+                if e.name.lower().endswith(".exe") and e.is_file():
+                    return True
+    except OSError:
+        return True                 # unreadable: leave it in the list
+    return False
 
 
 # ---------------------------------------------------------------- Epic
@@ -233,6 +281,12 @@ def scan_epic() -> list[Game]:
         try:
             d = json.loads(item.read_text(encoding="utf8", errors="replace"))
         except (OSError, json.JSONDecodeError):
+            continue
+        # Epic also registers engine plugins, content packs and Unreal
+        # Engine itself. A plugin's InstallLocation can be the entire engine
+        # tree (Quixel Bridge), which is both a false game and a huge scan.
+        # Older manifests without these flags still get inspected.
+        if d.get("bIsApplication") is False or d.get("bIsExecutable") is False:
             continue
         loc = d.get("InstallLocation")
         if not loc or not Path(loc).is_dir():
@@ -705,8 +759,16 @@ def set_api_override(folder: Path, api: str | None) -> None:
     prefs.set_("api_override", d)
 
 
-def enrich(g: Game) -> Game:
-    """Pick the executable and detect its architecture / graphics API."""
+def enrich(g: Game, chosen: bool = False) -> Game:
+    """Pick the executable and detect its architecture / graphics API.
+
+    `chosen` means the person picked this executable in the list: it is not
+    replaced by the store's stub or by an earlier install's record, and the
+    files go beside it (issue #56: Conan Exiles installed beside the launcher
+    after the Shipping exe was chosen).
+    """
+    if chosen:
+        g.install_root = None
     try:
         if g.exe is None or not g.exe.is_file():
             cands = pe.find_game_exes(g.folder)
@@ -718,8 +780,9 @@ def enrich(g: Game) -> Game:
             g.exe = cands[0]
         elif not g.candidates:
             g.candidates = pe.find_game_exes(g.folder) or [g.exe]
-        _prefer_real_exe(g)
-        adopt_previous_install(g)
+        if not chosen:
+            _prefer_real_exe(g)
+            adopt_previous_install(g)
         if _xbox_locked(g):
             # Keep the game in the list with its executable, so the detail
             # card can show the fix; there is nothing else to read here.
@@ -796,11 +859,58 @@ def scan_all(progress=None) -> list[Game]:
 
     total = len(games)
     for i, g in enumerate(games, 1):
-        if progress and (i % 5 == 0 or i == total):
-            progress(f"Inspecting games... {i}/{total}")
+        if progress:
+            progress(f"Inspecting games... {i}/{total}: {g.name}")
+        started = time.monotonic()
         enrich(g)
+        if time.monotonic() - started >= 1:
+            log.write(f"inspected {g.name} in {time.monotonic() - started:.1f}s")
+    games = same_exe_once(games)
     games.sort(key=lambda g: g.name.lower())
     return games
+
+
+def same_exe_once(games: list) -> list:
+    """One entry per game executable, the first store's.
+
+    Two stores can report one install under different folders - Steam gives
+    the library folder, the Rockstar launcher the GTAIV subfolder inside it -
+    and the folder check above passes both. The executable is only known
+    after enrich(), so this runs after it. Emulators are left alone: several
+    games of one system can share an emulator's executable.
+    """
+    def weight(g) -> tuple:
+        # The entry that carries something wins over the first one: an
+        # install recorded against it, or a graphics API set by hand - both
+        # are keyed by that entry's folder and would be lost with it.
+        try:
+            forced = bool(api_override(g.folder))
+        except Exception:
+            forced = False
+        return (bool(getattr(g, "installed", False)), forced)
+
+    at: dict = {}
+    out = []
+    for g in games:
+        exe = getattr(g, "exe", None)
+        if exe is None or getattr(g, "emu", None) is not None \
+                or getattr(g, "kind", "game") != "game":
+            out.append(g)
+            continue
+        try:
+            key = str(Path(exe).resolve()).lower()
+        except OSError:
+            key = str(exe).lower()
+        if key in at:
+            i = at[key]
+            if weight(g) > weight(out[i]):
+                g, out[i] = out[i], g
+            log.write(f"scan: {g.name} ({g.source}) is the same executable as "
+                      f"{out[i].name} ({out[i].source}) - listed once")
+            continue
+        at[key] = len(out)
+        out.append(g)
+    return out
 
 
 def manual(path: Path) -> Game:

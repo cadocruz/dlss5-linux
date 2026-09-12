@@ -1,19 +1,27 @@
 """Version selection for OptiScaler -- a DEFAULT, not a clamp.
 
-Upstream's optiscaler.resolve() always returns GitHub's latest Dagherbou
-release. Our default is instead the build proven under Proton on this machine:
-the y4my4my4m fork nightly of 2026-09-06 (7b7220bb), kept as a local zip in
-DLSS5_work/ because upstream's "nightly" tag rolls daily. Dagherbou v0.1.2 is
-the fallback if that file is missing. Every install can pick another:
+Upstream's optiscaler.resolve(build) returns the newest release of one of
+three lines: Dagherbou's (build ""), y4my4my4m's fork (optiscaler.FORK) or
+wilsjo2's (optiscaler.PRESR). Under Proton the y4my4my4m line is the one
+that works (FINDINGS.md), so the default here is:
 
-    set_optiscaler("default")      the local nightly zip (DEFAULT_ZIP), else FALLBACK_TAG
-    set_optiscaler("fallback")     Dagherbou v0.1.2 (FALLBACK_TAG)
-    set_optiscaler("latest")       whatever Dagherbou publishes now
+    the local nightly zip (default_zip()) when it sits in the components dir
+    (paths.components_dir()), else upstream's own resolver for the y4my4my4m fork.
+
+Every install can pick another:
+
+    set_optiscaler("default")        as above
+    set_optiscaler("latest")         upstream's resolver for whatever build the
+                                     install asked for (Options.opti_build)
+    set_optiscaler("fallback")       Dagherbou v0.1.2 (FALLBACK_TAG) -- loses the
+                                     NVAPI race under Proton; kept for bisecting
     set_optiscaler("v0.2.0-patch1")  any Dagherbou release tag
-    set_optiscaler("/path/to.zip") a local archive (staged into the cache)
+    set_optiscaler("/path/to.zip")   a local archive (staged into the cache)
 
 A tag is resolved through sources._json (cached, rate-limit tolerant), so
-testing a fresh upstream build is one flag, not a code change.
+testing a fresh upstream build is one flag, not a code change. The `build`
+argument the installer passes (Options.opti_build) is honoured by "default"
+when it names a fork explicitly, and by "latest" always.
 """
 from __future__ import annotations
 
@@ -22,14 +30,23 @@ from pathlib import Path
 
 from core import net, optiscaler as _opti, sources
 
-WORK = Path(__file__).resolve().parents[2]            # DLSS5_work/
+from . import paths as _paths
+
 DEFAULT_TAG = "y4my4m-nightly-20260906"               # label recorded in the manifest
-DEFAULT_ZIP = WORK / "OptiScaler_v10.0.0-pre1_20260906_y4my4m-nightly.zip"
+DEFAULT_ZIP_NAME = "OptiScaler_v10.0.0-pre1_20260906_y4my4m-nightly.zip"
+DEFAULT_BUILD = _opti.FORK                             # upstream's key for the y4my4my4m line
 FALLBACK_TAG = "v0.1.2-dIssnr"         # Dagherbou v0.1.2; capital-I typo is upstream's
 RELEASES = "https://api.github.com/repos/Dagherbou/OptiScaler_DLSSNR/releases"
 
 _choice = "default"
 _orig_resolve = _opti.resolve
+
+
+def default_zip() -> Path:
+    """The local nightly, looked up when asked for: components_dir() reads
+    $DLSS5_COMPONENTS_DIR, and freezing it at import froze whatever the
+    environment happened to say while linuxport was being imported."""
+    return _paths.components_dir() / DEFAULT_ZIP_NAME
 
 
 def set_optiscaler(choice: str) -> None:
@@ -55,18 +72,20 @@ def _local(p: Path, tag: str) -> tuple[str, str]:
     return tag, f"file://{dest}"
 
 
-def resolve() -> tuple[str, str]:
+def resolve(build: str = "") -> tuple[str, str]:
+    """Replacement for core.optiscaler.resolve; same signature and return."""
     c = _choice
     if c == "latest":
-        return _orig_resolve()
+        return _orig_resolve(build)
     if c == "fallback":
         return _by_tag(FALLBACK_TAG)
     if c == "default":
-        if DEFAULT_ZIP.is_file():
-            return _local(DEFAULT_ZIP, DEFAULT_TAG)
-        print(f"  !! default OptiScaler archive missing ({DEFAULT_ZIP.name}); "
-              f"falling back to Dagherbou {FALLBACK_TAG}")
-        return _by_tag(FALLBACK_TAG)
+        local = default_zip()
+        if local.is_file() and not build:
+            return _local(local, DEFAULT_TAG)
+        # No local nightly (or a fork was named): upstream's resolver for the
+        # y4my4my4m line, the one that works under Proton; a named build wins.
+        return _orig_resolve(build or DEFAULT_BUILD)
     p = Path(c).expanduser()
     if p.is_file():
         return _local(p, f"local-{net.sha256(p)[:8]}")

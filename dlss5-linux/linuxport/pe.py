@@ -63,11 +63,19 @@ _D3D12_NEEDLES = (b"d3d12core.dll", b"d3d12createdevice", b"d3d12sdkversion", b"
 
 
 def _contains(path: Path, needle: bytes) -> bool:
+    """Is this byte string anywhere in the file? Read in blocks, with the
+    tail of each one carried into the next: a needle straddling a block
+    boundary is invisible otherwise, and "d3d12createdevice" landing across
+    a 1 MiB edge would silently label an RE Engine title DX11."""
+    keep = len(needle) - 1
     try:
         with path.open("rb") as fh:
+            carry = b""
             while chunk := fh.read(1 << 20):
-                if needle in chunk.lower():
+                window = carry + chunk.lower()
+                if needle in window:
                     return True
+                carry = window[-keep:] if keep else b""
     except OSError:
         pass
     return False
@@ -81,16 +89,30 @@ _KNOWN_API = {
 }
 
 
+def _is_64bit(path: Path) -> bool:
+    try:
+        return _pe.exe_bitness(path) == 64
+    except Exception:          # PEError or an unreadable file: not evidence of anything
+        return False
+
+
+
 def detect_api(path: Path) -> tuple[str, str]:
     known = _KNOWN_API.get(path.name.lower())
     if known:
         return known
     # Unity first: its player embeds D3D12 symbols too, so the needle scan
-    # below would mislabel every Unity title as DX12.
+    # below would mislabel every Unity title as DX12. Upstream 1.7.2 handles
+    # UnityPlayer.dll only when opengl32.dll is imported; old Unity has no
+    # UnityPlayer.dll and only a *_Data folder, so this stays.
     if (path.parent / "UnityPlayer.dll").is_file() or (path.parent / (path.stem + "_Data")).is_dir():
         return "DX11", "Unity (UnityPlayer.dll / *_Data beside the exe): D3D11 at run time"
     api, why = _orig_detect_api(path)
-    if api in ("OpenGL", "DX9", "Unknown", "?"):
+    # Upstream 1.7.3 reads the exe's own strings for a 64-bit d3d9 importer and
+    # deliberately leaves a 32-bit one alone: every 32-bit game reaching a
+    # d3d9 verdict so far really was DirectX 9. The same rule applies here.
+    weak = api in ("OpenGL", "Unknown", "?") or (api == "DX9" and _is_64bit(path))
+    if weak:
         for n in _D3D12_NEEDLES:
             if _contains(path, n):
                 return "DX12", f"{n.decode()!r} in the executable (renderer loaded dynamically)"
