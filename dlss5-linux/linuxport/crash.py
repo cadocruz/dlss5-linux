@@ -119,7 +119,13 @@ def last_crash(exe_name: str, since: float = 0.0, within_days: int = 14) -> Cras
     exe = (exe_name or "").strip()
     if not exe:
         return None
-    return from_proton_log(exe, since) or from_coredumpctl(exe, since)
+    crash = from_proton_log(exe, since)
+    if crash or since <= 0:
+        # An anonymous Wine preloader coredump cannot be tied to a game without
+        # an install timestamp. Do not report an unrelated historical crash
+        # when verifying a folder that has no manifest yet.
+        return crash
+    return from_coredumpctl(exe, since)
 
 
 def describe(c: Crash | None, proxy: str = "", written: tuple[str, ...] = ()) -> tuple[str, str] | None:

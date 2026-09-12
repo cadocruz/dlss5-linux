@@ -70,6 +70,14 @@ def test_last_crash_is_the_wincrash_replacement(fake_home, monkeypatch):
     assert wincrash.last_crash("") is None
 
 
+def test_last_crash_does_not_use_anonymous_coredumps_without_install_time(monkeypatch):
+    monkeypatch.setattr(crash, "_coredumpctl_json", lambda: [
+        {"time": int(time.time()) * 1_000_000, "sig": 31,
+         "exe": "/usr/bin/wine64-preloader"},
+    ])
+    assert crash.last_crash("Fixture-Win64-Shipping.exe", since=0) is None
+
+
 def test_describe_uses_upstreams_ownership_rules_with_linux_words():
     c = wincrash.Crash(when="2026-09-10T20:00:00", exe="Game.exe", module="reshade64", code="page fault", provider="proton log")
     title, detail = crash.describe(c, "dxgi.dll", ("dxgi.dll",))
