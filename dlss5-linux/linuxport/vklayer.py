@@ -20,12 +20,13 @@ Why it is a route of its own here (measured 2026-09-10/11, RTX 5090, 615.71):
 Costs: post-present (the HUD gets the model too), synthetic vectors and no
 depth (a game WITH DLSS is still better served by OptiScaler, which keeps real
 vectors and depth and runs before the UI), no upscaling, one shared-memory
-copy each way per frame, with the present thread spinning on the answer
-(upstream #13: the GPU is never asked to wait, the CPU is, so utilisation has
-a ceiling). Zero-copy dma-buf cannot engage under a Wine runner: winevulkan
-exposes no fd-based external-memory extension. Controls are out-of-process
-too (dlssnr-gui, dlssnr-shmctl): there is no overlay, because nothing runs
-inside the game, and the hotkey is best left unbound (upstream #12).
+copy each way per frame, and the present thread blocked while the model
+evaluates (15.35 ms per frame measured on FF7 Remake at 5120x1440 and full
+working scale, 10.06 ms of it inference; workingscale is the lever). Zero-copy
+dma-buf cannot engage under a Wine runner: winevulkan exposes no fd-based
+external-memory extension. Controls are out-of-process too (dlssnr-gui,
+dlssnr-shmctl, an evdev hotkey that needs 0.3.0-2+): there is no overlay,
+because nothing runs inside the game.
 
 This module knows the install, reads its logs, writes the one launch token,
 and names the runtime by hash. It never installs the layer itself: the
@@ -76,9 +77,9 @@ CONTROLS = [
     "dlssnr-gui  -- every setting as a row (style, intensity, tone, structure, passes, working scale, HDR mode, "
     "white point, motion quality), profiles, split-screen compare, frame hold, debug views. Closing it stops the helper.",
     f"dlssnr-shmctl {SHM} settings | set <key> <value> | toggle enabled   -- the same from a shell",
-    "toggle hotkey: leave it unset. Binding one arms an evdev rescan that re-opens every "
-    "/dev/input node once a second ON THE PRESENT THREAD -- 122 ms of stall per second measured here "
-    "(upstream issue #12). Toggle from the GUI or shmctl instead until that is fixed.",
+    "toggle hotkey: DLSSNR_TOGGLE_KEY=F10 in the launch options, or 'Toggle key' in the GUI "
+    "(evdev: your user in the 'input' group). Needs DLSS5VKLayer 0.3.0-2 or newer: before it a bound key "
+    "stalled the present thread ~122 ms once a second (upstream #12).",
     "A/B without a second run: set compare 1 (split screen) or hold 1 (freeze the model's input)",
 ]
 
@@ -233,9 +234,9 @@ def verify(g) -> list[tuple[str, str, str]]:
                         "and that query fails on this runtime (upstream). Play in SDR for now." if proxy == "8-bit" else "")))
     st_set = shm_settings()
     if st_set and st_set.get("togglekey", "0") != "0":
-        out.append(("WARN", "toggle hotkey", f"togglekey={st_set.get('togglekey')} arms an evdev rescan on the present "
-                    "thread once a second (every /dev/input node re-opened; 122 ms measured here). Set it to 0 and "
-                    "toggle from the GUI or shmctl -- upstream #12"))
+        out.append(("INFO", "toggle hotkey", f"togglekey={st_set.get('togglekey')} is bound; fine on DLSS5VKLayer "
+                    "0.3.0-2 or newer. Older builds re-open every /dev/input node once a second on the present "
+                    "thread (~122 ms stall here, upstream #12) -- upgrade, or set it to 0"))
     if st_set:
         out.append(("INFO", "settings", f"enabled={st_set.get('enabled')} passes={st_set.get('passes')} "
                     f"workingscale={st_set.get('workingscale')} transfer={st_set.get('transfer')} "

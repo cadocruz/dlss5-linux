@@ -232,3 +232,18 @@ Not yet exercised on a real display -- run it.
 - `linuxport/pe.py`: a known-executable table for renderers the static import
   table misreports (ff7remake_.exe imports d3d11.dll, renders D3D12), so the
   feeder-on-D3D12 reasoning and the vk-layer hint land on the right games.
+
+### 2026-09-13 -- verdict fix, runtime timing line, VK layer 0.3.0-2
+
+- `linuxport/diagnosefix.py` (new): upstream diagnose reads the last 400 KB of
+  OptiScaler.log by default; a four-minute FF7 Rebirth session wrote 490 KB,
+  the window started after both "DLSS-NR running at" lines, and a later
+  "DLSS-NR did not run: it is switched off" (the player toggling the model
+  off) was counted as a failure: "the model refused or failed" for a session
+  that ran NR throughout. The default window is raised to 8 MB; callers that
+  pass their own limit (ReShade.log, which accumulates launches) keep theirs.
+- `linuxport/verify.py`: NR cost accepts `DLSS-NR elapsed:` (wilsjo2 0.7.7+ and
+  the mainline NR pull request) as well as y4my4m's `DLSS-NR cost:`.
+- `linuxport/vklayer.py`: hotkey needs 0.3.0-2 (upstream #12 fixed there);
+  the present-thread cost is inference, not transport (upstream #13 withdrawn
+  by its reporter; our own timing agrees), with workingscale as the lever.

@@ -21,7 +21,7 @@ binaries are redistributed by this repository.
 
 | game | api | route | result |
 |---|---|---|---|
-| FINAL FANTASY VII REBIRTH | D3D12 + DLSS | OptiScaler (nightly) | DLSS 310.9.1 + NR, HDR, ~5-8 ms/frame at 4K |
+| FINAL FANTASY VII REBIRTH | D3D12 + DLSS | OptiScaler (nightly) | DLSS 310.9.0 + NR, HDR, NR 4.9-6.3 ms at 3840x1440 |
 | 007 First Light | D3D12 + DLSS | OptiScaler (nightly) | works; the build that fixed the v0.2.x deadlock |
 | Horizon Forbidden West | D3D12 + DLSS | OptiScaler as winmm.dll | works |
 | Stellar Blade | D3D12 + DLSS | native (ReShade + RenoDX) or OptiScaler | both work; native keeps the game's FG |
@@ -47,9 +47,9 @@ included, no upscaling. A game with its own DLSS is still better served by
 OptiScaler. `examples/vklayer/README.md` is the recipe; the port knows the
 route (`vklayer status`, `launch-options --vklayer`, `verify --vklayer`)
 without installing it, and names the neural-rendering runtime by hash. Run
-0.3.0-1 or newer (older builds hang the GPU on a 1x1 probe swapchain), and
-leave its toggle hotkey unbound: both of those, and the present-thread spin
-that caps GPU utilisation, are in `FINDINGS.md`.
+0.3.0-2 or newer: older builds can hang the GPU on a 1x1 probe swapchain, and
+stall the present thread once a second when a toggle hotkey is bound. What
+the route costs per frame, measured, is in `FINDINGS.md`.
 
 ## Screenshots
 
@@ -117,7 +117,7 @@ its `launcher.ini` overrides are written by `launch-options --apply`.
   `dlls <game> restore` undoes it. NVIDIA publishes the three files in its
   own repository (tag `v310.9.1` at the time of writing, under
   `lib/Windows_x86_64/rel/`); a zip of them next to the tools is picked up as
-  the newest source.
+  the newest source. 310.9.1 is staged here but has not yet been run on a game.
 * The neural-rendering runtime, `nvngx_dlssnr.dll`, is not in any SDK and
   not shipped here. Know which build you have by hash: the NVIDIA-signed 310.8
   for RTX 50 is `e16bcf15...`, ShortFuse's cross-generation build for RTX

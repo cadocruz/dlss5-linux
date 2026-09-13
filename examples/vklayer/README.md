@@ -19,11 +19,11 @@ real depth, before the UI, integrated with the upscaler. This route is
 post-present (the HUD gets the model too), uses optical-flow vectors and zero
 depth, and does not upscale.
 
-Measured 2026-09-10/12: RTX 5090, NVIDIA 615.71, CachyOS, proton-cachyos-slr
-as the helper's runner, DLSS5VKLayer 0.2.6-2 then 0.3.0-1, FF7 Remake at
-5120x1440. Upstream ships most days; 0.3.0-1 carries a fix worth taking on any
-version older than it (a 1x1 probe swapchain built a model and hung the GPU
-with Xid 109 on the first submit, taking the game with it).
+Measured 2026-09-10/13: RTX 5090, NVIDIA 615.71, CachyOS, proton-cachyos-slr
+as the helper's runner, DLSS5VKLayer 0.2.6-2 through 0.3.0-2, FF7 Remake at
+5120x1440. Upstream ships most days. Run 0.3.0-2 or newer: 0.2.6-3 stopped a
+1x1 probe swapchain from building a model and hanging the GPU with Xid 109 on
+the first submit, and 0.3.0-2 fixed the hotkey stall noted under Controls.
 
 ## Install (user mode, no root)
 
@@ -87,12 +87,13 @@ take effect on the next frame:
   compare, a frame hold that freezes the model's input, and debug views.
   Closing the GUI stops the helper.
 * `dlssnr-shmctl /tmp/dlssnr-$UID/shm.bin settings | set <key> <value> | toggle enabled`
-* a toggle hotkey exists (`DLSSNR_TOGGLE_KEY=F10`, or the GUI's "Toggle key")
-  but **leave it unbound for now**: binding one arms an evdev rescan that
-  re-opens every `/dev/input` node once a second on the present thread. 122 ms
-  of stall per second measured on this machine with 16 nodes, whether or not
-  neural rendering is on (upstream issue #12). The default is none; the
-  setting persists in `~/.config/dlssnr/config.ini` as `set_toggle_key`.
+* a toggle hotkey: `DLSSNR_TOGGLE_KEY=F10` in the launch options (evdev: your
+  user in the `input` group), or the GUI's "Toggle key". **Needs 0.3.0-2 or
+  newer.** Before it, a bound key re-opened every `/dev/input` node once a
+  second on the present thread, 122 ms of stall per second with 16 nodes here
+  (upstream #12). 0.3.0-2 remembers which nodes are not keyboards and only
+  stats them: 0.01 ms per pass here. The setting persists in
+  `~/.config/dlssnr/config.ini` as `set_toggle_key`.
 
 ## Check a run
 
@@ -105,7 +106,7 @@ in shared memory, and the layer's lines in the Proton log: feature create
 result and size, frames through the model, transport, HDR state, and the
 per-frame rebuild described below.
 
-## Caveats (0.3.0-1, measured here)
+## Caveats (0.3.0-2, measured here)
 
 1. **HDR10 swapchains: play in SDR for now.** The layer's `Prepare()` compares
    the raw PQ transfer flag against a value it stores normalised to zero
@@ -119,11 +120,15 @@ per-frame rebuild described below.
    external-memory extensions on the Wine-side device and winevulkan does not
    expose them; frames cross shared memory. `ptrace_scope` does not matter on
    that path.
-4. **The present thread waits for the helper in a spin/poll loop**, so GPU
-   utilisation has a ceiling: no fence or semaphore takes part, the CPU does
-   the waiting, and the queue drains while it waits. Upstream issue #13
-   measures ~8.7 ms of wait against ~2.0 ms of actual helper GPU work at 4K.
-   This is the route's headline cost on a fast card.
+4. **The present thread waits while the model runs.** The layer blocks on the
+   helper's answer, so the game has nothing queued meanwhile and GPU
+   utilisation drops. Measured here on FF7 Remake at 5120x1440 with the default
+   full working scale: layer total 15.35 ms per frame, of which 4.83 ms
+   encoding the proxy and 10.53 ms waiting, and the helper's own evaluate is
+   10.06 ms of that wait. The wait is inference, not transport: upstream #13
+   first blamed the shared-memory handshake, and its reporter withdrew that
+   after measuring the helper side too. The lever is `workingscale`, which
+   defaults to 1.0; cost scales with area, so 0.5 puts the model near 2.5 ms.
 5. The "core" NGX init answering `0xbad00002` and the `[param-miss]
    DLSSNR.*Subrect*` lines in the helper log are expected.
 6. The helper must be running before the game starts, and it is stopped by

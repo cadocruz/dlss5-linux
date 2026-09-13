@@ -116,7 +116,9 @@ def run(g, rep=None) -> list[tuple[str, str, str]]:
             ver = re.findall(r"ReadVersion DLSS v([\d.]+) loaded", text)
             if ver:
                 out.append(("INFO", "DLSS runtime", f"v{ver[-1]} (the game's own, as OptiScaler loaded it)"))
-            costs = [float(c) for c in re.findall(r"DLSS-NR cost: ([\d.]+) ms total", text)]
+            # y4my4m writes "DLSS-NR cost: 5.30 ms total = ..."; the wilsjo2 line (0.7.7+) and
+            # the upstream NR pull request write "DLSS-NR elapsed: 5.30 ms total, ...".
+            costs = [float(c) for c in re.findall(r"DLSS-NR (?:cost|elapsed): ([\d.]+) ms total", text)]
             if costs:
                 costs.sort()
                 out.append(("INFO", "NR cost", f"{costs[0]:.1f} / {costs[len(costs)//2]:.1f} / {costs[-1]:.1f} ms "
