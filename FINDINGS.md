@@ -139,8 +139,13 @@ route, which does not enter the process at all.
      fixed; `verify --vklayer` counts the rebuilds.
   2. The float16 HDR proxy never engages on this runtime: the helper gates it
      on `NVSDK_NGX_VULKAN_GetFeatureRequirements` reporting HDR capability,
-     and that query returns `0xbad00005` here, so the model was created SDR
-     and saw PQ code values as an 8-bit picture.
+     and that query returns `0xbad00005` (feature not supported) here, so the
+     model was created SDR and saw PQ code values as an 8-bit picture. It is
+     not an NVAPI-reachability problem: with dxvk-nvapi logging on, the helper's
+     prefix initialises NVAPI and identifies the card, and the query still
+     fails. The snippet does ask dxvk-nvapi for one function it does not
+     implement (id `0xad298d3f`, "Unknown function ID"), which may be what the
+     query needs.
   3. Zero-copy dma-buf cannot engage under a Wine runner: the helper needs
      `VK_EXT_external_memory_dma_buf` + `VK_KHR_external_memory_fd` on the
      Wine-side device, and winevulkan does not expose the fd-based
@@ -181,8 +186,11 @@ route, which does not enter the process at all.
   whether or not neural rendering was enabled (upstream #12). Reproduced here,
   16 nodes, 122 ms per rescan. 0.3.0-2 remembers which nodes are not keyboards
   and only stats them afterwards: 0.01 ms per pass here.
+* **Native Linux Vulkan, smoke-tested.** `VKLayer_DLSS5=1 vkcube` put 1,830
+  frames through the model at 500x500: the layer, transport and helper work
+  for a native Vulkan process, not only for Proton. No real native game yet.
 * **Not done.** An SDR-mode run without finding 1, a reduced working scale,
-  native Linux titles, Cyberpunk with its mod stack.
+  a native Linux game, Cyberpunk with its mod stack.
 
 ## Neural-rendering runtime builds, by hash
 

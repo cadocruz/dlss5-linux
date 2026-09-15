@@ -114,8 +114,10 @@ per-frame rebuild described below.
    composition every frame. `verify --vklayer` counts it.
 2. **The float16 HDR proxy does not engage on this runtime**: the helper only
    tries HDR when `GetFeatureRequirements` reports it, and that query returns
-   `0xbad00005`, so the model is created SDR and sees PQ code values as an
-   8-bit picture.
+   `0xbad00005` (feature not supported), so the model is created SDR and sees
+   PQ code values as an 8-bit picture. NVAPI is reachable in the helper's
+   prefix (checked with `DXVK_NVAPI_LOG_LEVEL=info`), so this is the gate, not
+   the setup.
 3. **No zero-copy under a Wine runner.** dma-buf needs the fd-based
    external-memory extensions on the Wine-side device and winevulkan does not
    expose them; frames cross shared memory. `ptrace_scope` does not matter on
