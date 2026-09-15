@@ -36,13 +36,29 @@ def run(g, rep=None) -> list[tuple[str, str, str]]:
     if not rep.route and any((root / n).is_file() for n in ("ReShade.log", "OptiScaler.log", "dlss5-feed.log")):
         out.append(("WARN", "stale logs", "no in-process payload is installed here; the add-on lines below come from logs "
                     "an earlier route left behind (restore keeps them). The vk layer section, if any, is current."))
+    # A folder with none of our files is a state here, not a failed install.
+    # Upstream added a BAD finding for it in 1.9.0 (chain.py analyse()) for the
+    # "did it work?" button, which is pressed by somebody who believes they
+    # installed. On Linux the out-of-process vk-layer route writes nothing into
+    # the game folder at all - its manifests are Vulkan implicit layers under
+    # ~/.local/share - so a correctly set up game lands in exactly this branch,
+    # and a verify run across a library must not count every un-installed game
+    # as a failure. Upstream solves the same shape for Remix inside
+    # _anything_of_ours; we cannot edit core/, so the downgrade lives here.
+    # Gate on upstream's own predicate, not on the wording: a reworded finding
+    # stays covered, and a renamed helper fails loudly on the next re-vendor.
+    nothing_here = (diagnose._manifest_file(root) is None
+                    and not diagnose._anything_of_ours(root))
     seen: set[tuple[str, str]] = set()
     for f in rep.findings:                     # upstream re-registers per device; dedupe
         key = (f.title, f.detail)
         if key in seen:
             continue
         seen.add(key)
-        out.append((f.level.upper(), f.title, f.detail))
+        lvl = f.level.upper()
+        if nothing_here and lvl == "BAD":
+            lvl = "WARN"                       # keep the text and the mark, drop the exit code
+        out.append((lvl, f.title, f.detail))
     if rep.verdict:
         out.append(("INFO", "verdict", rep.verdict))
 

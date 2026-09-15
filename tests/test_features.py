@@ -17,13 +17,26 @@ def test_route_notes_start_with_the_blurb_and_carry_conflicts(game, monkeypatch)
     sup = dlss.detect(game.install_dir, game.folder, game.api, game.bitness, sm=120)
     for path in sup.options:
         blurb, warns = features.route_notes(game, path, sup)
-        assert blurb == [dlss.BLURB[path]]
-        for line in getattr(dlss, "CONFLICTS", {}).get(path, ()):
-            assert line in warns
+        assert blurb[0] == dlss.BLURB[path]
+        for _kind, line in getattr(dlss, "CONFLICTS", {}).get(path, ()):
+            # Nothing foreign in the fixture folder, so every conflict line stays
+            # informational: "ingame" always, "folder" until something is there.
+            assert line in blurb, (path, line)
         # nothing about the driver at all: not "older than DLSS 5", and not
         # the 616.64 evaluate fault either (both come from dlss.driver_warning)
         assert not any("driver" in w.lower() for w in warns), (path, warns)
 
+
+
+def test_a_folder_conflict_warns_only_when_another_ngx_hook_is_there(game, monkeypatch):
+    """The 1.9.0 split: same line, warning or not depending on the folder."""
+    monkeypatch.setattr(installer, "other_ngx_hooks", lambda root, path="": [])
+    blurb, warns = features.route_notes(game, dlss.NATIVE, None)
+    assert not warns and any("two NGX hooks" in b for b in blurb)
+
+    monkeypatch.setattr(installer, "other_ngx_hooks", lambda root, path="": ["dlssg_to_fsr3.dll"])
+    blurb, warns = features.route_notes(game, dlss.NATIVE, None)
+    assert any("dlssg_to_fsr3.dll" in w and "two NGX hooks" in w for w in warns)
 
 def test_route_notes_include_a_driver_warning_when_the_gate_says_so(game):
     """A pre-DLSS-5 driver number is the one case the Linux gate lets through."""

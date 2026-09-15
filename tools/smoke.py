@@ -136,7 +136,8 @@ def s_paths():
         "profiles.DIR": (profiles.DIR, paths.CONFIG / "profiles"),
         "library.FILE": (library.FILE, paths.CONFIG / "library.json"),
         "log.DIR": (log.DIR, paths.STATE),
-        "diagnose.STANDALONE_LOG": (diagnose.STANDALONE_LOG, paths.STATE / "standalone-dlssnr.log"),
+        "diagnose.model.STANDALONE_LOG": (diagnose.model.STANDALONE_LOG,
+                                         paths.STATE / "standalone-dlssnr.log"),
     }
     wrong = [k for k, (got, want) in expected.items() if Path(got) != want]
     if wrong:

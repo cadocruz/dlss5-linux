@@ -41,7 +41,22 @@ def route_notes(game, path: str, support, driver: str | None = None) -> tuple[li
     the route blurb, its known conflicts, the game's quirks, the driver."""
     blurb = [dlss.BLURB.get(path, "")]
     warns: list[str] = []
-    warns += list(getattr(dlss, "CONFLICTS", {}).get(path, ()))
+    # CONFLICTS entries became (kind, line) in upstream 1.9.0. gui.py splits them
+    # and so must we: an "ingame" line is a setting to change inside the game,
+    # not a warning about this folder, and a "folder" line only earns a warning
+    # when another NGX hook is actually sitting there. Flattening both into
+    # warnings - what this did before 1.9.0 - warns about nothing on a clean folder.
+    foreign: list[str] = []
+    try:
+        if game is not None and getattr(game, "install_dir", None):
+            foreign = installer.other_ngx_hooks(game.install_dir, path)
+    except Exception:
+        foreign = []
+    for kind, line in getattr(dlss, "CONFLICTS", {}).get(path, ()):
+        if kind == "folder" and foreign:
+            warns.append(f"{', '.join(foreign[:3])} in this folder - {line}")
+        else:
+            blurb.append(line)
     try:
         warns += list(dlss.quirks(game.exe if game else None, game.api if game else ""))
     except Exception:
