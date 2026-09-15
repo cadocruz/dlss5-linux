@@ -1,23 +1,17 @@
-"""Proton layer: everything Windows never needed, sourced from dlss5_proton.py.
+"""Proton layer: everything Windows never needed.
 
-Rather than re-port prefix discovery, Steam appid mapping, localconfig.vdf
-reading and WINEDLLOVERRIDES generation, import them from the tool that has
-been exercised on this machine for a week. One source of truth while both
-tools coexist; this module only adapts core.games.Game to what it expects.
+Prefix discovery, Steam appid mapping, localconfig.vdf and WINEDLLOVERRIDES
+live in linuxport/steam.py (lifted from the old proton-tool); this module
+adapts core.games.Game to them and adds what Proton itself needs: the NGX
+bridge check, the on-screen indicator, PROTON_DLSS_UPGRADE, XIVLauncher-RB.
 """
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
-from types import SimpleNamespace
 
-_TOOL = Path(__file__).resolve().parents[2] / "proton-tool"
-if str(_TOOL) not in sys.path:
-    sys.path.insert(0, str(_TOOL))
-import dlss5_proton as pt  # noqa: E402
-
-from core import games  # noqa: E402
+from core import games
+from . import steam as pt
 
 _APPIDS: dict[Path, str] | None = None
 
@@ -57,6 +51,26 @@ def ngx_bridge_present(g: games.Game) -> bool:
     return bool(s and (s / "_nvngx.dll").is_file())
 
 
+def proton_version(g: games.Game) -> str | None:
+    """The Proton build that last ran this prefix, from Steam's own record.
+
+    Steam writes `compatdata/<appid>/version` ("9.0-4" style, or the tool's
+    name for GE/CachyOS builds) when Proton sets the prefix up; a prefix made
+    by another launcher has no such file, and then there is no answer.
+    """
+    p = prefix_for(g)
+    if not p:
+        return None
+    for cand in (p.parent / "version", p / "version"):
+        try:
+            text = cand.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if text:
+            return text.splitlines()[0][:60]
+    return None
+
+
 def current_launch_options(g: games.Game) -> str | None:
     appid = appid_for(g)
     return pt.launch_options_for(appid) if appid else None
@@ -76,7 +90,14 @@ def override_entries(g: games.Game, proxy: str, route: str | None = None) -> lis
     * d3dcompiler_47 when a native copy sits beside the exe (the tool places
       one for ReShade on prefixes it could not run protontricks in).
     """
-    entries = [f"{Path(proxy).stem}=n,b"]
+    if proxy == "(vulkan layer)":
+        # No proxy DLL at all: ReShade is an implicit layer in the prefix.
+        # The override that matters is the loader's, when the LunarG one
+        # replaced Wine's builtin (linuxport.vulkan.ensure_native_loader).
+        from . import vulkan as _lv
+        entries = ["vulkan-1=n,b"] if _lv.native_loader_present(prefix_for(g)) else []
+    else:
+        entries = [f"{Path(proxy).stem}=n,b"]
     if (route in (None, "optiscaler")) and (g.api or "").upper() == "DX11":
         entries += ["d3d12=n,b", "d3d12core=n,b"]
     exe_dir = g.exe.parent if g.exe else g.folder
@@ -91,12 +112,15 @@ def launch_options(g: games.Game, proxy: str, indicator: bool | None = None,
 
     indicator=None keeps whatever the current options already say."""
     import re as _re
-    target = SimpleNamespace(appid=appid_for(g), folder=g.install_dir)
-    line = pt.build_launch_options(target, proxy)
+    line = pt.build_launch_options(appid_for(g), g.install_dir, proxy)
     entries = ";".join(override_entries(g, proxy, route))
-    line, n = _re.subn(r'WINEDLLOVERRIDES="[^"]*"', f'WINEDLLOVERRIDES="{entries}"', line)
-    if not n:
-        line = f'WINEDLLOVERRIDES="{entries}" {line}'
+    if entries:
+        line, n = _re.subn(r'WINEDLLOVERRIDES="[^"]*"', f'WINEDLLOVERRIDES="{entries}"', line)
+        if not n:
+            line = f'WINEDLLOVERRIDES="{entries}" {line}'
+    else:
+        # A Vulkan-layer install with Wine's own loader needs no override at all.
+        line = _re.sub(r'\s*WINEDLLOVERRIDES="[^"]*"\s*', " ", line).strip()
     if indicator is None:
         indicator = indicator_present(current_launch_options(g))
     return with_indicator(line, indicator)
@@ -116,7 +140,17 @@ def missing_overrides(g: games.Game, proxy: str, route: str | None = None) -> li
 
 
 def running(g: games.Game) -> bool:
-    return bool(g.exe) and pt.process_running(g.exe.name)
+    """Is the game's executable running? False when it cannot be told.
+
+    process_running shells out to pgrep; a box without procps (or a test
+    run on another OS) must read as "not running", not as a crash inside
+    'did it work?'."""
+    if not g.exe:
+        return False
+    try:
+        return pt.process_running(g.exe.name)
+    except OSError:
+        return False
 
 
 # --- non-Steam games: the prefix is not derivable, so it can be told to us ----
@@ -177,9 +211,17 @@ def launcher_overrides(g: games.Game) -> str | None:
     return None
 
 
-def launcher_running() -> bool:
+def _pgrep(*args: str) -> bool:
+    """True when pgrep finds a match; False when it does not or cannot run."""
     import subprocess
-    return subprocess.run(["pgrep", "-f", "XIVLauncher[.]Core"], capture_output=True).returncode == 0
+    try:
+        return subprocess.run(["pgrep", *args], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
+def launcher_running() -> bool:
+    return _pgrep("-f", "XIVLauncher[.]Core")
 
 
 def set_launcher_overrides(g: games.Game, entries: list[str]) -> Path:
@@ -221,7 +263,7 @@ def launch_help(g: games.Game, proxy: str, indicator: bool | None = None,
     entries = override_entries(g, proxy, route)
     joined = ";".join(entries)
     if appid_for(g):
-        return [f"steam > properties > launch options:", f"  {line}"]
+        return ["steam > properties > launch options:", f"  {line}"]
     if is_xlcore(g):
         return [
             "xivlauncher-rb runs this game through umu, so the override goes into its own config:",
@@ -263,6 +305,25 @@ def indicator_present(options: str | None) -> bool:
     return bool(options) and bool(_re.search(r"PROTON_DLSS_INDICATOR=([1-9]|true|yes|on)", options))
 
 
+# --- the DLSS runtime Proton ships ---------------------------------------------------------------
+# PROTON_DLSS_UPGRADE=1 makes Proton copy its bundled nvngx_dlss / dlssd / dlssg
+# (310.9 in Proton 11) into system32/umu/ at every launch, ahead of the game's
+# own. It is the Linux answer to "upgrade the game's DLSS" - the old tool did it
+# by swapping files in the game folder, which Proton then overrode anyway.
+DLSS_UPGRADE_ENV = "PROTON_DLSS_UPGRADE=1"
+
+
+def with_dlss_upgrade(line: str, on: bool = True) -> str:
+    import re as _re
+    line = _re.sub(r"\s*PROTON_DLSS_UPGRADE=\S+", "", line).strip()
+    return f"{DLSS_UPGRADE_ENV} {line}" if on else line
+
+
+def dlss_upgrade_present(options: str | None) -> bool:
+    import re as _re
+    return bool(options) and bool(_re.search(r"PROTON_DLSS_UPGRADE=([1-9]|true|yes|on)", options))
+
+
 # --- installed proxy + writing launch options ---------------------------------
 def installed_proxy(g: games.Game) -> str | None:
     """The proxy recorded by whichever tool set this game up, else None."""
@@ -272,8 +333,7 @@ def installed_proxy(g: games.Game) -> str | None:
 
 
 def steam_running() -> bool:
-    import subprocess
-    return subprocess.run(["pgrep", "-x", "steam"], capture_output=True).returncode == 0
+    return _pgrep("-x", "steam")
 
 
 def set_launch_options(g: games.Game, line: str) -> Path:
@@ -290,8 +350,16 @@ def set_launch_options(g: games.Game, line: str) -> Path:
     if steam_running():
         raise RuntimeError("Steam is running: close it first, or the edit is overwritten on exit")
     escaped = line.replace("\\", "\\\\").replace('"', '\\"')
-    for cfg in (pt.steam_roots()[0] / "userdata").glob("*/config/localconfig.vdf"):
-        text = cfg.read_text(encoding="utf-8", errors="replace")
+    # Every root, not just the first: a native Steam and a Flatpak one can sit
+    # side by side, and the appid may be in either. steam_roots() is also
+    # allowed to be empty (Steam somewhere this tool does not look), which
+    # indexing [0] turned into an IndexError out of a worker thread.
+    configs = pt.localconfigs()
+    for cfg in configs:
+        try:
+            text = cfg.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
         # the app block: "<appid>"\n{ ... } inside "apps"
         m = _re.search(r'(\n(\t+)"' + appid + r'"\n\2\{\n)(.*?)(\n\2\})', text, _re.S)
         if not m:
@@ -312,4 +380,8 @@ def set_launch_options(g: games.Game, line: str) -> Path:
         shutil.copy2(cfg, backup)
         cfg.write_text(text[:m.start()] + head + body + tail + text[m.end():], encoding="utf-8")
         return backup
-    raise RuntimeError(f"appid {appid} not found in any localconfig.vdf")
+    if not configs:
+        raise RuntimeError("no localconfig.vdf found under any Steam root - "
+                           "set STEAM_ROOT, or paste the line into Steam by hand")
+    raise RuntimeError(f"appid {appid} not found in any localconfig.vdf "
+                       f"({len(configs)} read)")

@@ -23,8 +23,17 @@ def fill(g: games.Game) -> games.Game:
         g.exe = exes[0] if exes else None
         g.candidates = exes
     if g.exe:
-        g.bitness = pe.exe_bitness(g.exe)
-        g.api, g.api_why = pe.detect_api(g.exe)
+        # Anything can be named on the command line: a launcher script, a
+        # data file, a path typed by hand. pe raises PEError for all of
+        # them, and it came out of argparse as a traceback.
+        try:
+            g.bitness = pe.exe_bitness(g.exe)
+        except pe.PEError as e:
+            g.error = str(e)
+        try:
+            g.api, g.api_why = pe.detect_api(g.exe)
+        except pe.PEError as e:
+            g.api, g.api_why = "?", str(e)
     return g
 
 
@@ -53,8 +62,8 @@ def _find(spec: str) -> games.Game:
             probe = probe.parent; name = probe.name
         return fill(games.Game(name=name, folder=folder, exe=p if p.is_file() else None, source="Manual"))
     if spec.isdigit():
-        from linuxport.proton import pt
-        g = pt.installed_games().get(spec)
+        from linuxport import steam
+        g = steam.installed_games().get(spec)
         if not g:
             sys.exit(f"no Steam game with appid {spec}")
         return fill(games.Game(name=g.name, folder=g.install_dir, source="Steam"))
@@ -79,9 +88,11 @@ def proton_appid(g) -> str | None:
         return None
 
 
-def report(g: games.Game, sm: int | None) -> None:
+def report(g: games.Game, sm: int | None, opti_build: str = "") -> None:
     print(f"\n{g.name}\n{'-' * 60}")
-    print(f"  exe       {g.exe.relative_to(g.folder) if g.exe else '?'}   x{g.bitness}  {g.api}  ({g.api_why})")
+    print(f"  exe       {g.exe.relative_to(g.folder) if g.exe else '?'}   x{g.bitness or '?'}  {g.api}  ({g.api_why})")
+    if g.error:
+        print(f"  BLOCKED   {g.error}"); return
     ok, why = installer.check_supported(g)
     if not ok:
         print(f"  BLOCKED   {why}"); return
@@ -95,7 +106,8 @@ def report(g: games.Game, sm: int | None) -> None:
         usable, note = dlss.fit(r, g.api, s.native_dlss, sm, s.upscaler)
         mark = "*" if r == s.recommended else " "
         print(f"   {mark} {r:<11} {lvl:<12} {note[:70]}")
-    opt = installer.Options(path=s.recommended, native_dlss=s.native_dlss, upscaler=s.upscaler)
+    opt = installer.Options(path=s.recommended, native_dlss=s.native_dlss, upscaler=s.upscaler,
+                            opti_build=opti_build)
     print(f"  plan      {' -> '.join(installer.plan(g, opt))}")
     from linuxport import vklayer
     hint = vklayer.suggestion(g, s.native_dlss)
@@ -115,6 +127,7 @@ def options_from(args, s) -> installer.Options:
         keep_game_dlss=not args.no_keep_game_dlss,
         reshade_proxy=args.proxy or "", opti_proxy=args.proxy or "",
         feeder_tag=args.feeder_tag or "", feeder_prerelease=bool(args.feeder_tag),
+        opti_build=getattr(args, "opti_build", "") or "",
     )
     if getattr(args, "provider", None) is not None:
         opt.provider = args.provider
@@ -122,7 +135,9 @@ def options_from(args, s) -> installer.Options:
 
 
 def cmd_install(args) -> int:
-    from linuxport import seed
+    from linuxport import features, seed
+    if getattr(args, "vr", False):
+        sys.exit(features.vr_reason())
     g = find(args.target, getattr(args, 'prefix', None))
     _, sm = gpu.detect()
     ok, why = installer.check_supported(g)
@@ -175,18 +190,43 @@ def cmd_install(args) -> int:
 
 
 def cmd_verify(args) -> int:
-    from linuxport import verify
+    from core import diagnose
+    from linuxport import features, verify
     g = find(args.target, getattr(args, 'prefix', None))
     print(f"\n{g.name}\n{'-' * 60}")
+    rep = diagnose.analyse(g.install_dir)
     bad = 0
-    rows = verify.run(g)
+    rows = verify.run(g, rep)
     if getattr(args, "vklayer", False) and not any(t == "vk layer" for _, t, _ in rows):
         from linuxport import vklayer
         rows += vklayer.verify(g)
     for lvl, title, detail in rows:
+
         mark = {"OK": "ok  ", "BAD": "FAIL", "WARN": "warn", "INFO": "    "}.get(lvl, lvl[:4])
         bad += lvl == "BAD"
         print(f"  [{mark}] {title:<18} {detail[:150]}")
+    route = features.manifest_route(g)
+    if getattr(args, "aim", None):
+        tune = features.autotune_after(g, route, 100, rep, args.aim)
+        if tune and tune.suggestion:
+            print(f"\n  aiming for {args.aim} fps:")
+            for ln in tune.suggestion.lines:
+                print(f"    > {ln}")
+            if tune.suggestion.resolution != tune.measured.resolution:
+                print(f"    apply it with:  verify {args.target!r} --aim {args.aim} --apply-tune")
+                if getattr(args, "apply_tune", False):
+                    features.apply_tune(g, route, tune.suggestion.resolution, print)
+                    print(f"    set to {tune.suggestion.resolution}% - read when the game starts")
+        else:
+            print(f"\n  aiming for {args.aim} fps: nothing measurable in the logs yet (play a session first)")
+    if getattr(args, "share", False):
+        if not rep.ran:
+            print("\n  share: the diagnosis found no run to report; play first")
+        else:
+            url = features.share_url(g, route, rep)
+            print("\n  share: a browser window opens with the result - nothing is sent unless you post it")
+            if not features.open_url(url):
+                print(f"  open this yourself:\n  {url[:200]}...")
     return 1 if bad else 0
 
 
@@ -245,24 +285,49 @@ def cmd_launch_options(args) -> int:
 
 
 def cmd_dlls(args) -> int:
-    """Swap the game's own DLSS SR/RR/FG runtimes with the newest archive next to the tools.
+    """The game's DLSS runtimes: Proton's way, not the old file swap.
 
-    Delegates to dlss5_proton.py's `dlls` subcommand (same state file, same undo)."""
-    import subprocess
+    The retired proton-tool replaced nvngx_dlss/dlssd/dlssg in the game folder
+    from an archive beside the tools; Proton overrode that at launch anyway.
+    Two mechanisms replace it: PROTON_DLSS_UPGRADE=1 (Proton's bundled 310.9
+    into system32/umu/ at every launch) and upstream's own catalog through
+    `install --dlss LABEL` / `--dlssd LABEL` (NVIDIA's repository, backed up
+    and restored on uninstall)."""
     from linuxport import proton
     g = find(args.target, getattr(args, 'prefix', None))
-    tool = Path(__file__).resolve().parents[1] / "proton-tool" / "dlss5_proton.py"
-    target = str(g.exe or g.folder)
-    cmd = [sys.executable, str(tool), "dlls", target]
-    pfx = proton.prefix_for(g)
-    if pfx and not proton.appid_for(g):
-        cmd += ["--prefix", str(pfx)]
-    cmd.append(args.action)
-    if args.action != "status":
-        cmd.append("-y")
-    if getattr(args, "streamline", False):
-        cmd.append("--streamline")
-    return subprocess.run(cmd).returncode
+    cur = proton.current_launch_options(g)
+    print(f"\n{g.name}\n{'-' * 60}")
+    print(f"  PROTON_DLSS_UPGRADE : {'on' if proton.dlss_upgrade_present(cur) else 'off'}"
+          f"{'' if proton.appid_for(g) else '   (non-Steam game: set it in the launcher environment)'}")
+    if args.action in ("install", "restore"):
+        on = args.action == "install"
+        proxy = proton.installed_proxy(g) or "dxgi.dll"
+        line = proton.with_dlss_upgrade(proton.launch_options(g, proxy, None, None), on)
+        print(f"  launch options      : {line}")
+        if args.yes:
+            try:
+                backup = proton.set_launch_options(g, line)
+                print(f"  applied. backup: {backup}")
+            except RuntimeError as e:
+                sys.exit(f"  not applied: {e}")
+        else:
+            print("  add -y to write it into Steam (Steam closed)")
+    print("  a specific build for THIS game: install <game> --dlss <label> [--dlssd <label>] "
+          "(NVIDIA's repository; the game's own file is backed up)")
+    return 0
+
+
+def cmd_migrate(args) -> int:
+    from linuxport import state
+    g = find(args.target, getattr(args, 'prefix', None))
+    if not state.needs_migration(g.install_dir):
+        print(f"{g.name}: nothing to migrate" + (
+            " (already has an upstream manifest)" if (g.install_dir / installer.MANIFEST).is_file()
+            else " (no proton-tool record here)"))
+        return 0
+    written = state.migrate(g.install_dir, print)
+    print(f"{g.name}: {written.name} written" if written else f"{g.name}: the record could not be read")
+    return 0 if written else 1
 
 
 def cmd_vklayer(args) -> int:
@@ -300,14 +365,19 @@ def main() -> int:
     import argparse
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")
-    for name in ("recommend", "install", "uninstall", "launch-options", "verify", "dlls"):
-        sp = sub.add_parser(name)
-        sp.add_argument("target", nargs="?" if name == "recommend" else None, default="Stellar Blade")
+    for name in ("recommend", "check", "install", "uninstall", "launch-options", "verify", "dlls", "migrate"):
+        sp = sub.add_parser(name, help={"check": "alias of recommend (upstream's --check)",
+                                        "migrate": "turn an old proton-tool record into an upstream manifest"}.get(name))
+        sp.add_argument("target", nargs="?" if name in ("recommend", "check") else None, default="Stellar Blade")
         sp.add_argument("--prefix", help="wine prefix for a non-Steam game (remembered for this folder)")
+        if name == "verify":
+            sp.add_argument("--aim", type=float, help="target fps: read the session's cost from the logs and suggest a work area")
+            sp.add_argument("--apply-tune", action="store_true", help="write the suggested work area into the game's config")
+            sp.add_argument("--share", action="store_true", help="open a pre-filled result issue upstream (nothing is sent by the tool)")
         if name == "dlls":
             sp.add_argument("action", nargs="?", default="status", choices=["status", "install", "restore"],
-                            help="status (default) | install = swap the game's DLSS SR/RR/FG to the newest archive | restore")
-            sp.add_argument("--streamline", action="store_true", help="also swap sl.*.dll (off: breaks some titles)")
+                            help="status (default) | install = PROTON_DLSS_UPGRADE=1 in the launch options | restore = remove it")
+            sp.add_argument("-y", "--yes", action="store_true", help="write the launch options (Steam closed)")
         if name == "launch-options":
             sp.add_argument("--proxy", help="default: the proxy recorded for this game")
             sp.add_argument("--apply", action="store_true", help="write it: Steam's localconfig.vdf (Steam closed) or xivlauncher-rb's launcher.ini (launcher closed)")
@@ -318,18 +388,27 @@ def main() -> int:
         if name in ("launch-options", "install"):
             sp.add_argument("--indicator", action="store_true", help="add PROTON_DLSS_INDICATOR=1 (on-screen DLSS/FG readout)")
             sp.add_argument("--no-indicator", action="store_true")
+        if name in ("recommend", "check", "install"):
+            # plan() names the OptiScaler line it would fetch, so the preview
+            # has to be able to ask about one other than Dagherbou's.
+            sp.add_argument("--opti-build", default="", choices=["", "y4my4my4m", "wilsjo2"],
+                            help="OptiScaler line for --optiscaler latest/default: '' Dagherbou, "
+                                 "y4my4my4m (multi-frame generation), wilsjo2 (neural pass before SR)")
         if name == "install":
             sp.add_argument("--route", choices=["native", "optiscaler", "upstream", "bridge", "feeder", "standalone", "renodx", "remix"])
             sp.add_argument("--addon", help="local renodx add-on file (-> Options.renodx_local)")
             sp.add_argument("--dlssnr", help="catalog label, e.g. 310.8.0 (default: best for this GPU)")
             sp.add_argument("--dlss", help="catalog label for nvngx_dlss (default: newest)")
             sp.add_argument("--optiscaler", default="default",
-                            help="default (y4my4m nightly 2026-09-06) | fallback (Dagherbou v0.1.2) | latest | <release tag> | /path/to.zip")
+                            help="default (local y4my4m nightly if present, else the y4my4my4m fork's newest release) | "
+                                 "latest (upstream's resolver for --opti-build) | fallback (Dagherbou v0.1.2) | "
+                                 "<Dagherbou release tag> | /path/to.zip")
             sp.add_argument("--feeder-tag", help="feeder release tag (implies pre-release)")
             sp.add_argument("--provider", type=int, choices=[0, 1, 2, 3, 4],
                             help="feeder motion vectors: 0 texMotionVectors (DRME/qUINT), 1 Launchpad, 2 VORT (works on D3D12 here), 3 LumeniteFX Kernel (upstream default), 4 QuantMotion")
             sp.add_argument("--proxy", help="proxy DLL name (dxgi.dll, winmm.dll, ...)")
             sp.add_argument("--no-keep-game-dlss", action="store_true")
+            sp.add_argument("--vr", action="store_true", help="upstream's OpenXR layer; refused under Proton with the reason")
             sp.add_argument("--force-route", action="store_true", help="install a route the game does not list")
             sp.add_argument("--dry-run", action="store_true")
             sp.add_argument("-y", "--yes", action="store_true")
@@ -349,6 +428,8 @@ def main() -> int:
         return cmd_uninstall(args)
     if args.cmd == "dlls":
         return cmd_dlls(args)
+    if args.cmd == "migrate":
+        return cmd_migrate(args)
     name, sm = gpu.detect()
     print(f"GPU: {name}  sm={sm} ({gpu.label(sm)})  driver {gpu.driver_version()}")
     if args.scan:
@@ -362,7 +443,8 @@ def main() -> int:
             tag = {"installed": f"[installed: {sdetail}]", "foreign": f"[found: {sdetail}]"}.get(state, "")
             print(f"  {g.name[:38]:<38} {g.source.lower()[:6]:<6} {g.api:<6} x{g.bitness or '?'}  dlss={'y' if s.native_dlss else 'n'}  -> {s.recommended:<10} {tag}")
         return 0
-    report(find(getattr(args, "target", None) or "Stellar Blade", getattr(args, "prefix", None)), sm)
+    report(find(getattr(args, "target", None) or "Stellar Blade", getattr(args, "prefix", None)), sm,
+           getattr(args, "opti_build", "") or "")
     return 0
 
 

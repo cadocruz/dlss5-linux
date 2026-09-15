@@ -1,9 +1,13 @@
-"""Make core.dlss._ours() recognise files written by dlss5_proton.py.
+"""Installs made by the old proton-tool: recognise them, and migrate them.
 
 Upstream decides "is this nvngx_dlss.dll the game's own?" by looking for its
-own manifest / backup suffix. Games we set up with the Proton tool carry
+own manifest / backup suffix. Games set up with the retired proton-tool carry
 `_dlss5_proton_state.json` instead, so a feeder install's nvngx_dlss.dll was
 being read as native DLSS -- and a game with no DLSS got steered to `native`.
+
+The read-side patches below keep those folders understood. `migrate()` writes
+the upstream manifest once, so the folder is a normal install from then on
+(uninstall, versions, diagnosis) and these patches become inert.
 """
 from __future__ import annotations
 
@@ -13,6 +17,7 @@ from pathlib import Path
 from core import dlss as _dlss
 
 OUR_STATE = "_dlss5_proton_state.json"
+MIGRATED_SUFFIX = ".migrated"
 _orig_ours = _dlss._ours
 
 
@@ -86,6 +91,36 @@ def _previous_manifest(root: Path) -> dict | None:
 
 def install_manifest() -> None:
     _inst._previous_manifest = _previous_manifest
+
+
+def needs_migration(root: Path) -> bool:
+    root = Path(root)
+    return (root / OUR_STATE).is_file() and not (root / _inst.MANIFEST).is_file()
+
+
+def migrate(root: Path, log=None) -> Path | None:
+    """Write the upstream manifest for an old proton-tool install, once.
+
+    The state file is kept beside it with MIGRATED_SUFFIX (the old tool's
+    `restore` still reads its own record; the copy is byte-identical). Returns
+    the manifest written, or None when there was nothing to do.
+    """
+    log = log or (lambda *_: None)
+    root = Path(root)
+    if not needs_migration(root):
+        return None
+    man = _from_proton_state(root)
+    if not man:
+        return None
+    man = dict(man)
+    man.pop("_source", None)
+    man["migrated_from"] = OUR_STATE
+    target = root / _inst.MANIFEST
+    target.write_text(json.dumps(man, indent=2), encoding="utf8")
+    (root / OUR_STATE).rename(root / (OUR_STATE + MIGRATED_SUFFIX))
+    log(f"      {target.name} written from {OUR_STATE} ({len(man['files'])} file(s), route {man['path']}); "
+        f"the old record is kept as {OUR_STATE}{MIGRATED_SUFFIX}")
+    return target
 
 
 # diagnose.analyse() has its own manifest reader; patch it the same way, or a

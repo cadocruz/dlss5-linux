@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from pathlib import Path
 
-from core import diagnose, installer
+from core import diagnose
 from . import proton
 
 BENIGN = ("queryNvapi", "XeSSFeature::LogCallback", "streamlineLogCallback",
@@ -23,11 +22,16 @@ def _tail(p: Path, n: int = 8_000_000) -> str:
         return ""
 
 
-def run(g) -> list[tuple[str, str, str]]:
-    """[(level, title, detail)] -- upstream findings first, then ours."""
+def run(g, rep=None) -> list[tuple[str, str, str]]:
+    """[(level, title, detail)] -- upstream findings first, then ours.
+
+    `rep` lets a caller that already ran diagnose.analyse() (the window keeps
+    it for 'share the result' and the auto-tuner) pass it in rather than
+    reading every log twice."""
     root = g.install_dir
     out: list[tuple[str, str, str]] = []
-    rep = diagnose.analyse(root)
+    if rep is None:
+        rep = diagnose.analyse(root)
     out.append(("INFO", "route", rep.route or "(no manifest)"))
     if not rep.route and any((root / n).is_file() for n in ("ReShade.log", "OptiScaler.log", "dlss5-feed.log")):
         out.append(("WARN", "stale logs", "no in-process payload is installed here; the add-on lines below come from logs "
@@ -68,9 +72,27 @@ def run(g) -> list[tuple[str, str, str]]:
                     "no _nvngx.dll in system32 -- game never run under Proton, or driver NGX missing"))
     if proton.running(g):
         out.append(("WARN", "process", f"{g.exe.name} is running now"))
+    if proxy == "(vulkan layer)":
+        from . import vulkan as lvulkan
+        lvulkan.use_game(g)
+        active = lvulkan.registered_for((man.get("bitness") or 64) != 32)
+        out.append(("OK" if active else "BAD", "vulkan layer",
+                    f"registered in the prefix ({active.name})" if active else
+                    "not registered in this prefix's registry - install again"))
+        if not lvulkan.native_loader_present(pfx):
+            out.append(("WARN", "vulkan loader", "system32/vulkan-1.dll is Wine's builtin, which does not load "
+                        "Windows layers - the LunarG loader step failed or was disabled"))
+
+    # --- what the system recorded when the game closed ------------------------
+    since = diagnose._installed_at(root)
+    if g.exe:
+        from . import crash as lcrash
+        c = lcrash.last_crash(g.exe.name, since)
+        said = lcrash.describe(c, proxy, tuple(man.get("files") or ()))
+        if said:
+            out.append(("BAD", "crash", f"{said[0]} {said[1]}"))
 
     # --- route-specific log readers ---------------------------------------
-    since = diagnose._installed_at(root)
     if rep.route == "optiscaler":
         log = root / "OptiScaler.log"
         text = _tail(log)
@@ -94,7 +116,9 @@ def run(g) -> list[tuple[str, str, str]]:
             ver = re.findall(r"ReadVersion DLSS v([\d.]+) loaded", text)
             if ver:
                 out.append(("INFO", "DLSS runtime", f"v{ver[-1]} (the game's own, as OptiScaler loaded it)"))
-            costs = [float(c) for c in re.findall(r"DLSS-NR cost: ([\d.]+) ms total", text)]
+            # y4my4m writes "DLSS-NR cost: 5.30 ms total = ..."; the wilsjo2 line (0.7.7+) and
+            # the upstream NR pull request write "DLSS-NR elapsed: 5.30 ms total, ...".
+            costs = [float(c) for c in re.findall(r"DLSS-NR (?:cost|elapsed): ([\d.]+) ms total", text)]
             if costs:
                 costs.sort()
                 out.append(("INFO", "NR cost", f"{costs[0]:.1f} / {costs[len(costs)//2]:.1f} / {costs[-1]:.1f} ms "

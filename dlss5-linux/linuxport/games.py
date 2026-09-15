@@ -80,7 +80,7 @@ def scan_all() -> list:
 def install_state(g) -> tuple[str, str]:
     """('installed'|'foreign'|'', detail) -- what is sitting beside the exe.
 
-    'installed' = a manifest from this tool or dlss5_proton.py. 'foreign' =
+    'installed' = a manifest from this tool or the retired proton-tool. 'foreign' =
     ReShade / OptiScaler / nvngx_dlssnr present with no record: someone put
     it there by hand. install() backs those up rather than clobbering them,
     but the list should say so before anyone gets that far.
