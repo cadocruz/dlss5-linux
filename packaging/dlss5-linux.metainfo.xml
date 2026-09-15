@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.pantsoftime.dlss5-linux</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>dlss5-linux</name>
+  <summary>DLSS 5 neural rendering for games running under Proton</summary>
+
+  <description>
+    <p>
+      Picks the injection route that fits a game running under Proton, installs it,
+      writes the Proton launch configuration, and reads the logs back to say whether
+      it worked.
+    </p>
+    <p>
+      Five routes. Four put something in the game folder - OptiScaler as a proxy DLL,
+      or ReShade with the feeder, native or bridge add-ons. The fifth is a Linux
+      Vulkan layer that runs the model beside the game and reaches what the others
+      cannot: native Vulkan titles, and D3D12 games without DLSS.
+    </p>
+    <p>
+      Nothing is bundled. Every component is fetched from its own publisher at run
+      time, and an install records what it wrote so it can be taken back out.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">dlss5-linux.desktop</launchable>
+  <url type="homepage">https://github.com/pantsoftime/dlss5-linux</url>
+  <url type="bugtracker">https://github.com/pantsoftime/dlss5-linux/issues</url>
+
+  <provides>
+    <binary>dlss5-linux</binary>
+  </provides>
+
+  <categories>
+    <category>Utility</category>
+    <category>Game</category>
+  </categories>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="@VERSION@"/>
+  </releases>
+</component>

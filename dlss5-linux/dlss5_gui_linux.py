@@ -936,6 +936,13 @@ class App(QtWidgets.QMainWindow):
 
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv); app.setStyle("Fusion")
+    # Both names are how a desktop finds the icon for this window, and they
+    # have to agree with the .desktop file: X11 matches its StartupWMClass
+    # against WM_CLASS, which Qt takes from applicationName, and Wayland has no
+    # WM_CLASS at all - it resolves the window through the desktop file name.
+    # Without them a packaged build shows the generic fallback in the taskbar.
+    app.setApplicationName("dlss5-linux")
+    app.setDesktopFileName("dlss5-linux")
     w = App(); w.show(); return app.exec()
 
 

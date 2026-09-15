@@ -1,0 +1,57 @@
+#!/bin/sh
+# Entry point for the AppImage. Two rules here, both about what the children
+# inherit, because almost everything this tool does is run another program:
+# protontricks (a script on the host's python), flatpak, wine under Proton,
+# nvidia-smi, 7z, pgrep, coredumpctl, xdg-open.
+#
+#   1. Export nothing that changes how a program finds libraries or modules.
+#      No LD_LIBRARY_PATH: the bundled interpreter finds libpython by its own
+#      rpath and PySide6 finds Qt by $ORIGIN, so there is nothing to point at.
+#      No PYTHONHOME or PYTHONPATH either - protontricks runs on the host's
+#      python3 and would import this bundle's stdlib. No QT_PLUGIN_PATH or
+#      QT_QPA_PLATFORM_PLUGIN_PATH: PySide6 locates its own plugins through
+#      qt.conf, and exported they would reach dlssnr-gui and every Qt child.
+#      No XDG_DATA_DIRS prepend, which the usual AppRun templates do: the
+#      Vulkan loader and Wine read it.
+#
+#   2. -I, so the interpreter ignores PYTHON* from the user's shell and adds
+#      no user site-packages. Safe because both entry points put their own
+#      directory on sys.path themselves.
+#
+# APPDIR, APPIMAGE, OWD and ARGV0 do leak to children. They are inert.
+set -eu
+
+HERE="$(dirname "$(readlink -f "$0")")"
+PYTHON="$HERE/usr/python/bin/python3"
+APP="$HERE/usr/app"
+
+# The squashfs is read-only, so .pyc writes fail silently and every launch pays
+# the compile. Point the cache somewhere writable instead.
+XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export PYTHONPYCACHEPREFIX="$XDG_CACHE_HOME/dlss5-linux/pycache"
+
+# The GUI is the default; the CLI is reached by calling the file under a name
+# ending in -cli (a symlink, or Gear Lever's), or with --cli as the first
+# argument. $0 is always AppRun once the runtime has started us, so the name
+# the user actually typed is in $ARGV0.
+called="$(basename "${ARGV0:-$0}")"
+entry="$APP/dlss5_gui_linux.py"
+case "$called" in
+    *-cli|*cli) entry="$APP/dlss5_linux.py" ;;
+esac
+if [ "${1:-}" = "--cli" ]; then
+    entry="$APP/dlss5_linux.py"
+    shift
+fi
+
+# No display is a terminal invocation of the GUI, which would otherwise fail
+# with a Qt platform error that says nothing useful. QT_QPA_PLATFORM set means
+# the caller has chosen one - offscreen, in a test - so leave it alone.
+if [ "$entry" != "$APP/dlss5_linux.py" ] && [ -z "${QT_QPA_PLATFORM:-}" ] \
+   && [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    echo "dlss5-linux: no display; starting the command line instead." >&2
+    echo "             run it with --cli to skip this message." >&2
+    entry="$APP/dlss5_linux.py"
+fi
+
+exec "$PYTHON" -I "$entry" "$@"

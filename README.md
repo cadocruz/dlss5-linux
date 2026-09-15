@@ -84,6 +84,36 @@ and a verify against the same game.
 
 ## Install
 
+### The AppImage
+
+One file, nothing to install. It carries its own Python, Qt and 7-Zip, which is
+what makes it work on a Steam Deck and the other read-only distributions: they
+have no package manager to install p7zip with, and the OptiScaler nightlies are
+`.7z`, so without a bundled one the route that works best under Proton is the
+one that cannot be unpacked there.
+
+```bash
+chmod +x dlss5-linux-*-x86_64.AppImage
+./dlss5-linux-*-x86_64.AppImage                 # the three-page wizard
+./dlss5-linux-*-x86_64.AppImage --cli --scan    # the command line
+```
+
+It still needs what it cannot carry: Steam or another Proton launcher, and an
+NVIDIA driver holding `nvngx_dlssnr.dll`. Components are downloaded from their
+own publishers at run time as they always were, and archives you keep by hand
+go in `$DLSS5_COMPONENTS_DIR` (default `~/.local/share/dlss5-linux/components`).
+
+Two things it is careful about. Everything it runs - `wine`, `protontricks`,
+`nvidia-smi`, `flatpak` - runs with your environment, not the bundle's. And
+`launch-options --vklayer` writes a path that outlives the AppImage's mount
+point, because Steam keeps launch options for months and that mount is gone the
+moment the tool exits.
+
+Built with `bash packaging/build-appimage.sh`; the interpreter and 7-Zip are
+pinned by sha256 in `packaging/pins.lock`.
+
+### From the checkout
+
 Requirements: Python 3.11+, `PySide6` for the GUI, `7z` (p7zip) for the
 OptiScaler nightly archives, Steam or a Proton launcher, an NVIDIA driver that
 carries `nvngx_dlssnr.dll` (or the runtime archive next to the tools).

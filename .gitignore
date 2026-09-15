@@ -17,3 +17,10 @@ discord/
 notes/
 memory/
 *.bak-*
+
+# The AppImage build. packaging/ is the recipe and is committed; build/ is the
+# downloaded interpreter, the wheels and the AppDir, and the artefact is 134 MB.
+# packaging/pins.lock is NOT ignored - it is what makes a build reproducible.
+build/
+*.AppImage
+*.AppImage.zsync
