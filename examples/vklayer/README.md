@@ -19,8 +19,8 @@ real depth, before the UI, integrated with the upscaler. This route is
 post-present (the HUD gets the model too), uses optical-flow vectors and zero
 depth, and does not upscale.
 
-Measured 2026-09-10/13: RTX 5090, NVIDIA 615.71, CachyOS, proton-cachyos-slr
-as the helper's runner, DLSS5VKLayer 0.2.6-2 through 0.3.0-2, FF7 Remake at
+Measured 2026-09-10/14: RTX 5090, NVIDIA 615.71, CachyOS, proton-cachyos-slr
+as the helper's runner, DLSS5VKLayer 0.2.6-2 through 0.3.0-3, FF7 Remake at
 5120x1440. Upstream ships most days. Run 0.3.0-2 or newer: 0.2.6-3 stopped a
 1x1 probe swapchain from building a model and hanging the GPU with Xid 109 on
 the first submit, and 0.3.0-2 fixed the hotkey stall noted under Controls.
@@ -60,7 +60,27 @@ copied patched build that works but is not the one to give a helper.
 
 ## Enable it for a game
 
-Steam launch options, and nothing else:
+The layer never starts its helper, the helper never stops on its own (it is a
+daemon whose wait loop costs ~18% of a core while idle), and the controls are
+a desktop window. `vklayer-run`, beside the port, handles all three around one
+game. It runs on the host before the game's command: starts the helper if it
+is not up and waits until it reports ready, opens `dlssnr-gui` so alt-tab
+reaches the settings while you play (`DLSSNR_GUI=0` to skip; the GUI gets the
+desktop session's environment, not Steam's, so it is a normal window), exports
+the enable token, runs the game, then closes the GUI it opened and stops the
+helper it started (`DLSSNR_KEEP=1` keeps both; anything already running is
+left alone). The wrapper strips Steam's overlay preload from everything it
+starts and hands it back to the game only: inherited, it made the helper take
+35 s to come up. Minimise the GUI while playing, do not close it: its close
+button stops the helper. Steam launch options:
+
+```text
+/path/to/dlss5-linux/vklayer-run %command%
+```
+
+`launch-options <game> --vklayer` prints exactly that line, with the real
+path, and `--apply` writes it while Steam is closed. The bare form still works
+if you would rather manage the helper yourself:
 
 ```text
 VKLayer_DLSS5=1 %command%
@@ -73,7 +93,7 @@ in-process route, remove that payload first (`dlss5_proton.py restore
 harmless once the files are gone. `PROTON_LOG=1 PROTON_DEBUG_DIR=$HOME` keeps
 the layer's own lines in `~/steam-<appid>.log`, which `verify --vklayer` reads.
 
-For a native Linux game: `VKLayer_DLSS5=1 ./game`, same token.
+For a native Linux game: `vklayer-run ./game` (or `VKLayer_DLSS5=1 ./game` with the helper started by hand).
 
 ## Controls
 
@@ -114,8 +134,10 @@ per-frame rebuild described below.
    composition every frame. `verify --vklayer` counts it.
 2. **The float16 HDR proxy does not engage on this runtime**: the helper only
    tries HDR when `GetFeatureRequirements` reports it, and that query returns
-   `0xbad00005`, so the model is created SDR and sees PQ code values as an
-   8-bit picture.
+   `0xbad00005` (feature not supported), so the model is created SDR and sees
+   PQ code values as an 8-bit picture. NVAPI is reachable in the helper's
+   prefix (checked with `DXVK_NVAPI_LOG_LEVEL=info`), so this is the gate, not
+   the setup.
 3. **No zero-copy under a Wine runner.** dma-buf needs the fd-based
    external-memory extensions on the Wine-side device and winevulkan does not
    expose them; frames cross shared memory. `ptrace_scope` does not matter on
@@ -131,5 +153,17 @@ per-frame rebuild described below.
    defaults to 1.0; cost scales with area, so 0.5 puts the model near 2.5 ms.
 5. The "core" NGX init answering `0xbad00002` and the `[param-miss]
    DLSSNR.*Subrect*` lines in the helper log are expected.
-6. The helper must be running before the game starts, and it is stopped by
-   closing the GUI or by `dlssnr-helper stop`.
+6. **Idle repaint (0.3.0-3+) works under vkd3d-proton, seen on screen.** Pause
+   the game and change a setting; the picture updates: the layer re-composes the held frame through the helper
+   (visible in `helper.log` as a retune + rebuild, and as helper frames beyond
+   the layer's presents). `DLSSNR_IDLE_REPAINT=0` turns it off. The layer's
+   request for `VK_EXT_swapchain_maintenance1` is refused by vkd3d-proton's
+   device and retried without; harmless.
+7. **The helper is a daemon and it is not free while idle.** It must be running
+   before the game starts, it outlives the game, and its wait loop spins on
+   the shared-memory counter (20,000 yields, then a 1 ms sleep, repeat): about
+   18% of one core, continuously, with no game running, plus a Vulkan device
+   and ~35 MiB of VRAM (measured on 0.3.0-3). Stop it when you are done:
+   `dlssnr-helper stop`, `dlss5_linux.py vklayer stop`, or close `dlssnr-gui`,
+   which stops it too. Nothing in the layer or the helper stops it for you;
+   `vklayer-run` in the launch options does.

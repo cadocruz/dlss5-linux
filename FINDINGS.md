@@ -139,8 +139,13 @@ route, which does not enter the process at all.
      fixed; `verify --vklayer` counts the rebuilds.
   2. The float16 HDR proxy never engages on this runtime: the helper gates it
      on `NVSDK_NGX_VULKAN_GetFeatureRequirements` reporting HDR capability,
-     and that query returns `0xbad00005` here, so the model was created SDR
-     and saw PQ code values as an 8-bit picture.
+     and that query returns `0xbad00005` (feature not supported) here, so the
+     model was created SDR and saw PQ code values as an 8-bit picture. It is
+     not an NVAPI-reachability problem: with dxvk-nvapi logging on, the helper's
+     prefix initialises NVAPI and identifies the card, and the query still
+     fails. The snippet does ask dxvk-nvapi for one function it does not
+     implement (id `0xad298d3f`, "Unknown function ID"), which may be what the
+     query needs.
   3. Zero-copy dma-buf cannot engage under a Wine runner: the helper needs
      `VK_EXT_external_memory_dma_buf` + `VK_KHR_external_memory_fd` on the
      Wine-side device, and winevulkan does not expose the fd-based
@@ -181,8 +186,52 @@ route, which does not enter the process at all.
   whether or not neural rendering was enabled (upstream #12). Reproduced here,
   16 nodes, 122 ms per rescan. 0.3.0-2 remembers which nodes are not keyboards
   and only stats them afterwards: 0.01 ms per pass here.
+* **The helper is a daemon, and idling is not free.** `dlssnr-helper start`
+  leaves it up after the game exits; only `dlssnr-helper stop` or closing the
+  GUI ends it. Its wait loop spins on the shared-memory counter (20,000 yields,
+  then a 1 ms sleep, repeat), which costs about 18% of one core continuously
+  with no game running, plus a Vulkan device and ~35 MiB of VRAM (measured on
+  0.3.0-3). If a background process is hogging a core after you finish
+  playing, this is it. The layer does not start the helper either: without
+  one running, every frame passes through. The port's `vklayer-run` wrapper,
+  put in front of `%command%`, starts the helper before the game, waits for
+  it to report ready, opens `dlssnr-gui` beside the game so alt-tab reaches
+  the settings (with the desktop session's environment, not Steam's, which
+  carries the overlay in `LD_PRELOAD` and its runtime's library paths), and
+  closes the GUI and stops the helper when the game exits; `launch-options
+  --vklayer` emits that form. Three things learned building it. Steam hands
+  the wrapper its overlay in `LD_PRELOAD`, and a helper started with that
+  inherited took 35 s to become ready instead of 2 (the overlay hooks every
+  Proton and Wine process of the helper and waits on Steam), while Steam
+  counted those processes as SteamVR activity; the wrapper now strips the
+  preload from everything it runs and gives it back to the game alone.
+  `dlssnr-helper stop` can run for a minute or more after the helper is
+  already dead (it polls every `/proc/*/cmdline` through a subprocess, in
+  loops), so the wrapper runs it detached and Steam sees the game exit at
+  once. And the GUI's close button stops the helper, so minimise it while
+  playing. A backoff to a longer sleep after a moment of
+  idleness would fix the cost upstream.
+* **0.3.0-3 (2026-09-15) adds an idle repaint.** When the game stops
+  presenting (paused, occluded, alt-tabbed) a layer thread acquires a
+  swapchain image itself and re-composes the held frame, so settings changes
+  show while the picture is still; `DLSSNR_IDLE_REPAINT=0` turns it off.
+  Works on FF7 Remake under vkd3d-proton, seen on screen: with the game paused,
+  intensity changes from `dlssnr-shmctl` updated the picture; they reached the helper (it logs the retune and the
+  rebuild) and the helper evaluated ~700 frames more than the layer presented,
+  which are the repaints. The layer's request for `VK_EXT_swapchain_maintenance1`
+  at device creation is refused by vkd3d-proton's device (feature not present)
+  and it retries with the game's own list; the repaint still worked without it.
+* **SDR run, the intended path.** Same game, same resolution, SDR: the
+  composition was built twice in 10,411 frames (once per swapchain) instead of
+  once per frame, which confirms the rebuild bug is HDR10-only. Cost medians
+  over 370 samples: encode 4.28, wait 10.59, total 15.02 ms; helper evaluate
+  9.31 ms. SDR saves about half a millisecond of encode; the model costs the
+  same, so `workingscale` remains the lever.
+* **Native Linux Vulkan, smoke-tested.** `VKLayer_DLSS5=1 vkcube` put 1,830
+  frames through the model at 500x500: the layer, transport and helper work
+  for a native Vulkan process, not only for Proton. No real native game yet.
 * **Not done.** An SDR-mode run without finding 1, a reduced working scale,
-  native Linux titles, Cyberpunk with its mod stack.
+  a native Linux game, Cyberpunk with its mod stack.
 
 ## Neural-rendering runtime builds, by hash
 

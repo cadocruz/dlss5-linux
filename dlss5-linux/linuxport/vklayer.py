@@ -45,6 +45,9 @@ from . import proton
 
 ENV = "VKLayer_DLSS5=1"
 UPSTREAM = "https://github.com/bmitch87/DLSS5VKLayer"
+# The wrapper beside the port: starts the helper before the game and stops it
+# after, because the layer does neither (see vklayer-run's header).
+WRAPPER = Path(__file__).resolve().parents[1] / "vklayer-run"
 
 _HOME = Path.home()
 RUNTIME_DIR = Path(f"/tmp/dlssnr-{os.getuid()}")      # not $XDG_RUNTIME_DIR: Steam's container makes that private
@@ -81,6 +84,11 @@ CONTROLS = [
     "(evdev: your user in the 'input' group). Needs DLSS5VKLayer 0.3.0-2 or newer: before it a bound key "
     "stalled the present thread ~122 ms once a second (upstream #12).",
     "A/B without a second run: set compare 1 (split screen) or hold 1 (freeze the model's input)",
+    "the helper is a daemon that spins ~18% of one core while idle, and the layer never starts or stops it: "
+    "put `vklayer-run` in front of %command% (launch-options --vklayer does) and it starts the helper, opens "
+    "dlssnr-gui beside the game (alt-tab to it; minimise, never close: closing stops the helper), and stops "
+    "both after. DLSSNR_GUI=0 skips the window, DLSSNR_KEEP=1 keeps everything up. Without the wrapper: "
+    "`vklayer start` before, `vklayer stop` after.",
 ]
 
 
@@ -141,15 +149,25 @@ def shm_settings() -> dict[str, str]:
 
 # --- launch options --------------------------------------------------------
 def enabled_in(options: str | None) -> bool:
-    return bool(options) and bool(re.search(r"(^|\s)VKLayer_DLSS5=1(\s|$)", options))
+    """The token, or the wrapper (which exports the token itself)."""
+    return bool(options) and bool(re.search(r"(^|\s)VKLayer_DLSS5=1(\s|$)|(^|[\s/])vklayer-run(\s|$)", options))
 
 
 def with_layer(line: str | None, on: bool = True) -> str:
-    """Add or remove the layer's enable token in a launch-options string."""
-    line = re.sub(r"\s*VKLayer_DLSS5=\S+", "", line or "").strip()
+    """Add or remove the route in a launch-options string.
+
+    On: the wrapper in front of %command% when it exists beside the port (it
+    starts and stops the helper around the game), else the bare token. Off:
+    both forms removed."""
+    line = re.sub(r"\s*VKLayer_DLSS5=\S+", "", line or "")
+    line = re.sub(r"(^|\s)\S*vklayer-run(?=\s|$)", "", line).strip()
     if "%command%" not in line:
         line = (line + " %command%").strip()
-    return f"{ENV} {line}" if on else line
+    if not on:
+        return line
+    if WRAPPER.is_file():
+        return line.replace("%command%", f"{WRAPPER} %command%", 1)
+    return f"{ENV} {line}"
 
 
 def launch_line(g, on: bool = True, indicator: bool | None = None) -> str:
@@ -212,8 +230,15 @@ def verify(g) -> list[tuple[str, str, str]]:
     stale = stale_overrides(g)
     if stale:
         out.append(("INFO", "overrides", f'WINEDLLOVERRIDES="{stale}" is still set with no in-process payload; harmless, remove when convenient'))
-    out.append(("OK" if helper_running() else "BAD", "helper",
-                "running" if helper_running() else "not running -- dlssnr-helper start (it must be up before the game)"))
+    wrapped = bool(cur and "vklayer-run" in cur)
+    out.append(("OK" if helper_running() or wrapped else "BAD", "helper",
+                "running" if helper_running() else
+                ("stopped; vklayer-run in the launch options starts it with the game and stops it after" if wrapped
+                 else "not running -- dlssnr-helper start (it must be up before the game), or use vklayer-run")))
+    if helper_running() and not (cur and "vklayer-run" in cur):
+        out.append(("INFO", "helper idle cost", "the helper is a daemon: it outlives the game and its wait loop spins "
+                    "~18% of one core with no frames coming (measured on 0.3.0-3). `vklayer stop` after playing, "
+                    "or put vklayer-run in the launch options and it is stopped for you."))
     digest, label = runtime()
     lvl = "OK" if digest and digest.startswith("e16bcf15") or digest and digest.startswith("e67dee20") else ("WARN" if digest else "BAD")
     out.append((lvl, "NR runtime", f"{label}" + (f"  sha256 {digest[:12]}..." if digest else "")))
