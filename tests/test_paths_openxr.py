@@ -16,7 +16,11 @@ def test_every_localappdata_path_is_under_xdg():
     assert Path(profiles.DIR) == paths.CONFIG / "profiles"
     assert Path(library.FILE) == paths.CONFIG / "library.json"
     assert Path(log.DIR) == paths.STATE
-    assert Path(diagnose.STANDALONE_LOG) == paths.STATE / "standalone-dlssnr.log"
+    # .model, not the package: since 1.9.0 diagnose/__init__ lists STANDALONE_LOG
+    # in PATCHED and does not re-export it. Reading it off the package would
+    # pass against whatever paths.install() had just set there, while the code
+    # that matters read diagnose.model and still had the Windows path.
+    assert Path(diagnose.model.STANDALONE_LOG) == paths.STATE / "standalone-dlssnr.log"
     # prefs.FILE is redirected per test by conftest; the module default is XDG too
     assert paths.CONFIG.name == paths.APP and paths.CACHE.name == paths.APP
 
@@ -38,7 +42,8 @@ def test_paths_honour_the_xdg_variables(monkeypatch, tmp_path):
 
 
 def test_no_core_path_points_at_a_dlss5_autopilot_folder():
-    for p in (net.CACHE, sources._API_CACHE, profiles.DIR, library.FILE, log.DIR, diagnose.STANDALONE_LOG):
+    for p in (net.CACHE, sources._API_CACHE, profiles.DIR, library.FILE, log.DIR,
+              diagnose.model.STANDALONE_LOG):
         assert "dlss5-autopilot" not in str(p), p
 
 

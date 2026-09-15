@@ -101,6 +101,66 @@ def _hasattr_guards(tree: ast.Module, aliases: dict[str, str]) -> set[tuple[str,
     return guarded
 
 
+def dunder_all(module_path: Path) -> set[str]:
+    """The names a module lists in __all__, when it is a plain literal."""
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    out: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets):
+            continue
+        if isinstance(node.value, (ast.List, ast.Tuple)):
+            for e in node.value.elts:
+                if isinstance(e, ast.Constant) and isinstance(e.value, str):
+                    out.add(e.value)
+    return out
+
+
+def literal_strings(module_path: Path, name: str) -> set[str]:
+    """A module-level `NAME = ("a", "b")` of plain strings."""
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    out: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            if isinstance(node.value, (ast.List, ast.Tuple)):
+                for e in node.value.elts:
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str):
+                        out.add(e.value)
+    return out
+
+
+def package_names(pkg_dir: Path) -> set[str]:
+    """What `diagnose.<name>` reaches when core/diagnose is a package.
+
+    core/diagnose was one module until upstream 1.9.0. Its __init__ now
+    re-exports every submodule's __all__ onto the package - except the names
+    listed in PATCHED, which stay only on the submodule that owns them,
+    because a copy would be a value that looks right and is not the one the
+    code reads. Mirroring that subtraction here is the point: it is what makes
+    this check catch a shim that patches the package when it must patch the
+    submodule.
+    """
+    init = pkg_dir / "__init__.py"
+    exported: set[str] = set()
+    for sub in sorted(pkg_dir.glob("*.py")):
+        if sub.name != "__init__.py":
+            exported |= dunder_all(sub)
+    return top_level_names(init) | (exported - literal_strings(init, "PATCHED"))
+
+
+def module_names(core_dir: Path, module: str) -> set[str] | None:
+    """Top-level names of core/<module>.py, or of core/<module>/ as a package."""
+    mp = core_dir / f"{module}.py"
+    if mp.is_file():
+        return top_level_names(mp)
+    pkg = core_dir / module
+    if (pkg / "__init__.py").is_file():
+        return package_names(pkg)
+    return None
+
+
 def uses_in(path: Path) -> list[Use]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     aliases = _core_aliases(tree)
@@ -217,8 +277,7 @@ def check(core_dir: Path, linux_files: list[Path] | None = None) -> Result:
         for use in uses_in(f):
             res.uses.append(use)
             if use.module not in cache:
-                mp = core_dir / f"{use.module}.py"
-                cache[use.module] = top_level_names(mp) if mp.is_file() else None
+                cache[use.module] = module_names(core_dir, use.module)
                 res.checked_modules.add(use.module)
             names = cache[use.module]
             if names is None or use.name not in names:
@@ -243,10 +302,12 @@ def report(res: Result, core_dir: Path) -> None:
 def report_windows(core_dir: Path) -> None:
     print("\nWindows reach in core/ (windows-only = cannot import on Linux; "
           "needs-shim = a function to replace; tk-ui = window code to re-create in Qt):")
-    for mp in sorted(core_dir.glob("*.py")):
+    # core/diagnose is a package since 1.9.0, so one level down counts too.
+    for mp in sorted(list(core_dir.glob("*.py")) + list(core_dir.glob("*/*.py"))):
         top, inner = windows_imports(mp)
         if top or inner:
-            print(f"  {mp.name:<18} {portability(mp):<13} {', '.join(top + inner)}")
+            label = mp.name if mp.parent == core_dir else f"{mp.parent.name}/{mp.name}"
+            print(f"  {label:<18} {portability(mp):<13} {', '.join(top + inner)}")
 
 
 def main() -> int:

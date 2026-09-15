@@ -42,6 +42,10 @@ def install() -> None:
     profiles.DIR = CONFIG / "profiles"
     library.FILE = CONFIG / "library.json"
     log.DIR = STATE
-    diagnose.STANDALONE_LOG = STATE / "standalone-dlssnr.log"
+    # STANDALONE_LOG lives on diagnose.model since upstream 1.9.0 split diagnose
+    # into a package, and its __init__ deliberately does NOT re-export it: a copy
+    # on the package would be a value that looks right and is not the one the
+    # code reads. Patch where it lives, or the log silently keeps the Windows path.
+    getattr(diagnose, "model", diagnose).STANDALONE_LOG = STATE / "standalone-dlssnr.log"
     for d in (net.CACHE, CONFIG, STATE):
         d.mkdir(parents=True, exist_ok=True)

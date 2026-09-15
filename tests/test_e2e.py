@@ -442,7 +442,10 @@ def test_the_cli_prints_the_override_line_for_a_non_steam_game(tmp_path, cli_gam
 
 def test_the_cli_verifies_a_folder_with_nothing_installed(tmp_path, cli_game):
     r = _cli(tmp_path, "verify", str(cli_game))
+    # Reported, but not a failure: upstream marks "nothing of ours here" BAD for
+    # its GUI button, and the vk-layer route legitimately leaves the folder empty.
     assert r.returncode == 0, r.stderr
+    assert "Nothing of this tool" in r.stdout
     assert "route" in r.stdout and "no manifest" in r.stdout
 
 
