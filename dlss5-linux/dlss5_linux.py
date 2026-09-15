@@ -248,8 +248,13 @@ def cmd_launch_options(args) -> int:
         if stale and on:
             print(f'  note    : WINEDLLOVERRIDES="{stale}" is still there with no in-process payload; harmless')
         if on:
-            print(f"  helper  : {'running' if vklayer.helper_running() else 'not running -- dlssnr-helper start before the game'}"
-                  + ("" if vklayer.installed() else f"   !! layer not installed: {vklayer.UPSTREAM}"))
+            if vklayer.WRAPPER.is_file():
+                print("  helper  : started by vklayer-run when the game launches, stopped when it exits "
+                      "(DLSSNR_KEEP=1 to keep it; it idles at ~18% of a core otherwise)")
+            else:
+                print(f"  helper  : {'running' if vklayer.helper_running() else 'not running -- dlssnr-helper start before the game'}")
+            if not vklayer.installed():
+                print(f"  !! layer not installed: {vklayer.UPSTREAM}")
             for c in vklayer.CONTROLS[:1]:
                 print(f"  note    : {c}")
         if args.apply:
@@ -333,10 +338,25 @@ def cmd_migrate(args) -> int:
 def cmd_vklayer(args) -> int:
     """The out-of-process route's own state: install, helper, runtime, live counters, controls."""
     from linuxport import vklayer
+    if args.action in ("start", "stop"):
+        import os, subprocess
+        exe = vklayer.helper_exe()
+        if not exe:
+            sys.exit("dlssnr-helper is not on PATH -- install DLSS5VKLayer first (examples/vklayer)")
+        env = dict(os.environ)
+        if args.action == "start":
+            env.setdefault("DLSSNR_TIME", "1")       # per-frame timing in helper.log; verify reads it
+        rc = subprocess.run([exe, args.action], env=env).returncode
+        if args.action == "stop":
+            print("helper stopped. Start it again before the next game: dlss5_linux.py vklayer start")
+        return rc
     print(f"\nDLSS5VKLayer\n{'-' * 60}")
     m = vklayer.manifest()
     print(f"  layer     {'installed: ' + str(m) if m else 'not installed -- ' + vklayer.UPSTREAM + ' (examples/vklayer)'}")
     print(f"  helper    {vklayer.helper_exe() or 'dlssnr-helper not on PATH'}   {'running' if vklayer.helper_running() else 'stopped'}")
+    if vklayer.helper_running():
+        print("            it stays up after the game exits and spins ~18% of one core while idle: "
+              "`vklayer stop` when you are done (closing dlssnr-gui also stops it)")
     digest, label = vklayer.runtime()
     print(f"  runtime   {label}" + (f"   sha256 {digest[:16]}..." if digest else ""))
     st = vklayer.shm_status()
@@ -413,7 +433,8 @@ def main() -> int:
             sp.add_argument("--dry-run", action="store_true")
             sp.add_argument("-y", "--yes", action="store_true")
     vk = sub.add_parser("vklayer", help="the out-of-process DLSS5VKLayer route: install state, helper, runtime, live counters")
-    vk.add_argument("action", nargs="?", default="status", choices=["status", "controls"])
+    vk.add_argument("action", nargs="?", default="status", choices=["status", "controls", "start", "stop"],
+                    help="status | controls | start (the helper, before a game) | stop (after: an idle helper spins ~18%% of a core)")
     ap.add_argument("--scan", action="store_true")
     args = ap.parse_args()
     if args.cmd == "vklayer":

@@ -46,8 +46,10 @@ route costs: synthetic motion vectors from optical flow, no depth, the HUD
 included, no upscaling. A game with its own DLSS is still better served by
 OptiScaler. `examples/vklayer/README.md` is the recipe; the port knows the
 route (`vklayer status`, `launch-options --vklayer`, `verify --vklayer`)
-without installing it, and names the neural-rendering runtime by hash. Run
-0.3.0-2 or newer: older builds can hang the GPU on a 1x1 probe swapchain, and
+without installing it, names the neural-rendering runtime by hash, and ships
+`vklayer-run`, a launch-option wrapper that starts the layer's helper with
+the game and stops it after (the layer does neither, and an idle helper
+costs a fifth of a core). Run 0.3.0-2 or newer: older builds can hang the GPU on a 1x1 probe swapchain, and
 stall the present thread once a second when a toggle hotkey is bound. What
 the route costs per frame, measured, is in `FINDINGS.md`.
 
@@ -117,7 +119,8 @@ its `launcher.ini` overrides are written by `launch-options --apply`.
   `dlls <game> restore` undoes it. NVIDIA publishes the three files in its
   own repository (tag `v310.9.1` at the time of writing, under
   `lib/Windows_x86_64/rel/`); a zip of them next to the tools is picked up as
-  the newest source. 310.9.1 is staged here but has not yet been run on a game.
+  the newest source. 310.9.1 is verified on 007 First Light (dlss: true, NR at
+  5120x1440 DLAA, ~6 ms).
 * The neural-rendering runtime, `nvngx_dlssnr.dll`, is not in any SDK and
   not shipped here. Know which build you have by hash: the NVIDIA-signed 310.8
   for RTX 50 is `e16bcf15...`, ShortFuse's cross-generation build for RTX
