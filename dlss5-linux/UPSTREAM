@@ -1,5 +1,6 @@
 Kizzuwatnaa/DLSS5-Autopilot
-commit aa8bb30 (v1.8.1, 2026-09-11)
+commit c3bab6d (v1.9.0, 2026-09-15)
 license MIT (see LICENSE.upstream)
 core/ vendored unmodified; all Linux changes live in linuxport/
-previous: 8225fff (v1.7.1, 2026-09-06)
+synced 2026-09-15 by tools/sync_upstream.py
+previous: aa8bb30 (v1.8.1)

@@ -32,6 +32,50 @@ class PEError(Exception):
     pass
 
 
+def file_version(path) -> str:
+    """"310.8.0" - the version stamped in a DLL, or "" if it has none.
+
+    Read from the file's own VS_FIXEDFILEINFO through Windows' version API,
+    which is where NVIDIA stamps the DLSS build number. It is the only way
+    to know what is in a game folder NOW: the install record says what this
+    tool wrote, and a launcher that verifies its files puts its own copy
+    back without telling anybody.
+
+    A trailing zero is dropped, because NVIDIA writes 310.8.0 as 310.8.0.0
+    and nobody calls it that.
+    """
+    if os.name != "nt":
+        return ""
+    try:
+        import ctypes
+        import ctypes.wintypes as w
+        ver = ctypes.WinDLL("version", use_last_error=True)
+        p = str(Path(path))
+        size = ver.GetFileVersionInfoSizeW(w.LPCWSTR(p), None)
+        if not size:
+            return ""
+        buf = ctypes.create_string_buffer(size)
+        if not ver.GetFileVersionInfoW(w.LPCWSTR(p), 0, size, buf):
+            return ""
+        block = ctypes.c_void_p()
+        length = ctypes.c_uint()
+        if not ver.VerQueryValueW(buf, w.LPCWSTR("\\"),
+                                  ctypes.byref(block), ctypes.byref(length)):
+            return ""
+        if length.value < 52:                    # a VS_FIXEDFILEINFO is 52
+            return ""
+        data = ctypes.string_at(block, length.value)
+        sig, _sver, ms, ls = struct.unpack("<IIII", data[:16])
+        if sig != 0xFEEF04BD:                    # not a fixed-info block
+            return ""
+        parts = [ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF]
+        while len(parts) > 3 and parts[-1] == 0:
+            parts.pop()
+        return ".".join(str(n) for n in parts)
+    except Exception:
+        return ""
+
+
 def exe_bitness(path: Path) -> int:
     """Return 32 or 64, read from the PE COFF header's Machine field.
 
@@ -449,6 +493,32 @@ _RUNTIME_SIBLING_MAX = 64 * 1024 * 1024
 _AMBIGUOUS = {"opengl32.dll", "vulkan-1.dll"}
 
 
+# Unreal ships as <root>/<Project>/Binaries/Win64/<X>-Shipping.exe with the
+# engine's own folder at <root>/Engine, and its shipping executables import
+# no graphics DLL at all - the RHI is loaded at run time. What IS in the
+# file is the string "opengl32.dll", from the OpenGL RHI its Windows builds
+# have not used since 4.27, and that made the tool call an Unreal game an
+# OpenGL one: ReShade would have gone in as opengl32.dll, which such a game
+# never loads, and the report would have come back with no log at all.
+# Found by detect_check on an installed UE5 game (WARDOGS).
+_UNREAL_BIN = ("win64", "wingdk", "winarm64")
+
+
+def _is_unreal(exe: Path) -> bool:
+    """The Unreal layout around this executable, by shape rather than name."""
+    parents = exe.parents
+    if len(parents) < 4:
+        return False
+    if parents[0].name.lower() not in _UNREAL_BIN:
+        return False
+    if parents[1].name.lower() != "binaries":
+        return False
+    try:
+        return (parents[3] / "Engine").is_dir()
+    except OSError:
+        return False
+
+
 def _engine_default(exe: Path, names: dict[str, Path] | None = None) -> tuple[str, str] | None:
     """(api, reason) when an engine module beside the exe settles it."""
     if names is None:
@@ -460,6 +530,13 @@ def _engine_default(exe: Path, names: dict[str, Path] | None = None) -> tuple[st
     for n, hit in _ENGINE_DEFAULT.items():
         if n in names and names[n].is_file():
             return hit
+    if _is_unreal(exe):
+        return ("DX12", "an Unreal Engine game (Binaries/Win64 beside the "
+                        "engine's own folder) - Direct3D 12 or 11, and "
+                        "ReShade goes in as dxgi.dll either way. The "
+                        "opengl32 name such an executable carries is "
+                        "Unreal's OpenGL RHI, which its Windows builds do "
+                        "not use")
     return None
 
 
@@ -613,10 +690,57 @@ def _score(exe: Path, folder: Path) -> float:
         pass
     # Very deep = probably a helper
     s -= rel.count("/") * 15
+    # Unity keeps the game's data in <exe name>_Data beside the player, and
+    # nothing else has one. The player exe itself is small - under a
+    # megabyte - so size alone ranked the launcher beside it higher (#152).
+    try:
+        if (exe.parent / f"{exe.stem}_Data").is_dir():
+            s += 300
+    except OSError:
+        pass
     return s
 
 
 _TRIAL = re.compile(r"[\s._-]*(trial|demo)$")
+# "UBOAT Launcher.exe" beside "UBOAT.exe": the launcher is the settings box
+# that starts the game, and ReShade in front of it hooks nothing (#152).
+_LAUNCHER = re.compile(r"[\s._-]*launcher$")
+
+# A name that is a launcher whatever else is in the folder. #152's rule only
+# demoted one whose stripped name had an exact sibling - "UBOAT Launcher" ->
+# "UBOAT" - so GTAVLauncher.exe beside GTA5.exe kept its place and the whole
+# install went in front of a process that draws nothing (#191). These are
+# the shapes that start the game in a NEW process: whatever is put in front
+# of them is loaded by the launcher and unloaded when it hands over.
+_LAUNCHER_NAME = re.compile(
+    r"launcher([\s._-]|$)"                     # GTAVLauncher, UBOAT Launcher
+    r"|^launch([\s._-]|$)"                     # Launch, Launch Game
+    r"|^start_protected_game$"                 # Easy Anti-Cheat's bootstrapper
+    r"|^(eos|epic|ea|origin|uplay|ubisoft)[\s._-]?(launch|start)",
+    re.I)
+
+
+def launcher_like(exe: Path) -> bool:
+    """Is this executable a launcher rather than the thing that draws?"""
+    return bool(_LAUNCHER_NAME.search(Path(exe).stem))
+
+
+def real_exe_for(exe: Path, candidates: list[Path] | None = None) -> Path | None:
+    """The executable that actually renders, when `exe` is a launcher.
+
+    None when `exe` does not look like a launcher, or when there is nothing
+    better in the folder to name - a launcher-only folder (the game lives
+    somewhere else entirely) must not be answered with a guess.
+    """
+    exe = Path(exe)
+    if not launcher_like(exe):
+        return None
+    if candidates is None:
+        root = exe.parent
+        candidates = find_game_exes(root)
+    better = [p for p in candidates
+              if p != exe and not launcher_like(p) and looks_like_game(p)]
+    return better[0] if better else None
 
 
 def find_game_exes(folder: Path) -> list[Path]:
@@ -635,9 +759,18 @@ def find_game_exes(folder: Path) -> list[Path]:
     # the trial stays in the list for whoever plays it.
     stems = {(p.parent, p.stem.lower()) for p in cands}
     for p in cands:
-        base = _TRIAL.sub("", p.stem.lower())
-        if base != p.stem.lower() and (p.parent, base) in stems:
-            score[p] -= 600
+        for pat in (_TRIAL, _LAUNCHER):
+            base = pat.sub("", p.stem.lower())
+            if base != p.stem.lower() and (p.parent, base) in stems:
+                score[p] -= 600
+    # And a launcher whose game is not named after it: GTAVLauncher.exe
+    # beside GTA5.exe (#191). Only when something else here could be the
+    # game - a folder holding nothing but a launcher still has to offer it,
+    # or the game cannot be picked at all.
+    if any(not launcher_like(p) for p in cands):
+        for p in cands:
+            if launcher_like(p):
+                score[p] -= 600
     scored = sorted(cands, key=lambda p: score[p], reverse=True)
     # Drop obvious helpers, but never return nothing if that is all there is.
     good = [p for p in scored if score[p] > -500]
