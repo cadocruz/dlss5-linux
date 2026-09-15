@@ -133,8 +133,8 @@ per-frame rebuild described below.
    defaults to 1.0; cost scales with area, so 0.5 puts the model near 2.5 ms.
 5. The "core" NGX init answering `0xbad00002` and the `[param-miss]
    DLSSNR.*Subrect*` lines in the helper log are expected.
-6. **Idle repaint (0.3.0-3+) works under vkd3d-proton.** Pause the game and
-   change a setting; the layer re-composes the held frame through the helper
+6. **Idle repaint (0.3.0-3+) works under vkd3d-proton, seen on screen.** Pause
+   the game and change a setting; the picture updates: the layer re-composes the held frame through the helper
    (visible in `helper.log` as a retune + rebuild, and as helper frames beyond
    the layer's presents). `DLSSNR_IDLE_REPAINT=0` turns it off. The layer's
    request for `VK_EXT_swapchain_maintenance1` is refused by vkd3d-proton's

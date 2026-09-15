@@ -198,8 +198,8 @@ route, which does not enter the process at all.
   presenting (paused, occluded, alt-tabbed) a layer thread acquires a
   swapchain image itself and re-composes the held frame, so settings changes
   show while the picture is still; `DLSSNR_IDLE_REPAINT=0` turns it off.
-  Works on FF7 Remake under vkd3d-proton: with the game paused, intensity
-  changes from `dlssnr-shmctl` reached the helper (it logs the retune and the
+  Works on FF7 Remake under vkd3d-proton, seen on screen: with the game paused,
+  intensity changes from `dlssnr-shmctl` updated the picture; they reached the helper (it logs the retune and the
   rebuild) and the helper evaluated ~700 frames more than the layer presented,
   which are the repaints. The layer's request for `VK_EXT_swapchain_maintenance1`
   at device creation is refused by vkd3d-proton's device (feature not present)
