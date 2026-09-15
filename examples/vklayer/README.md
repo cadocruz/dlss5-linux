@@ -60,13 +60,17 @@ copied patched build that works but is not the one to give a helper.
 
 ## Enable it for a game
 
-The layer never starts its helper, and the helper never stops on its own (it
-is a daemon whose wait loop costs ~18% of a core while idle). `vklayer-run`,
-beside the port, does both around one game: it runs on the host before the
-game's command, starts the helper if it is not up, waits until it reports
-ready, exports the enable token, runs the game, and stops the helper when the
-game exits (`DLSSNR_KEEP=1` keeps it; a helper that was already running is
-left alone). Steam launch options:
+The layer never starts its helper, the helper never stops on its own (it is a
+daemon whose wait loop costs ~18% of a core while idle), and the controls are
+a desktop window. `vklayer-run`, beside the port, handles all three around one
+game. It runs on the host before the game's command: starts the helper if it
+is not up and waits until it reports ready, opens `dlssnr-gui` so alt-tab
+reaches the settings while you play (`DLSSNR_GUI=0` to skip; the GUI gets the
+desktop session's environment, not Steam's, so it is a normal window), exports
+the enable token, runs the game, then closes the GUI it opened and stops the
+helper it started (`DLSSNR_KEEP=1` keeps both; anything already running is
+left alone). Minimise the GUI while playing, do not close it: its close button
+stops the helper. Steam launch options:
 
 ```text
 /path/to/dlss5-linux/vklayer-run %command%

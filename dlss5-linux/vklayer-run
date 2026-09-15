@@ -5,18 +5,22 @@
 #   native game:            vklayer-run ./game
 #
 # The layer (VK_LAYER_NV_dlssnr) never starts its helper: if dlssnr_helper.exe
-# is not already running, every frame passes through untouched. And the helper
-# never stops on its own: it is a daemon whose wait loop spins ~18% of one core
-# for as long as it lives. So neither end of the session is automatic. This
-# wrapper does both -- it runs on the host, outside Steam's container, before
-# the game's own command, which is how mangohud and gamemoderun get in too.
+# is not already running, every frame passes through untouched. The helper
+# never stops on its own: it is a daemon whose wait loop spins ~18% of one
+# core for as long as it lives. And there is no in-game overlay: the controls
+# are dlssnr-gui, a desktop window. So this wrapper, which runs on the host in
+# front of the game's own command (the way mangohud and gamemoderun get in):
 #
-#   1. start the helper if it is not running, and wait until it says it is
-#      ready (the first start also builds its own Proton prefix: up to a
-#      minute; a later one: a few seconds);
-#   2. export the layer's enable token and run the game, waiting for it;
-#   3. stop the helper -- unless DLSSNR_KEEP=1, or it was already running
-#      when this wrapper started (then it was somebody else's to stop).
+#   1. starts the helper if it is not running and waits until it says it is
+#      ready (a first start also builds its Proton prefix: up to a minute);
+#   2. opens dlssnr-gui beside the game so alt-tab reaches the settings
+#      (DLSSNR_GUI=0 to skip it; a GUI already open is left alone);
+#   3. exports the layer's enable token and runs the game, waiting for it;
+#   4. closes the GUI it opened and stops the helper it started
+#      (DLSSNR_KEEP=1 keeps both; whatever was already running stays).
+#
+# Do not CLOSE the GUI while playing: its close button stops the helper, and
+# neural rendering with it. Minimise it or alt-tab back to the game.
 #
 # DLSSNR_TIME=1 is set for the helper so its per-frame timing lands in
 # helper.log, which `dlss5_linux.py verify --vklayer` reads. Everything else
@@ -24,52 +28,91 @@
 # launch options as usual.
 set -u
 
+log() { echo "vklayer-run: $*" >&2; }
+
 helper="$(command -v dlssnr-helper || true)"
 if [ -z "$helper" ]; then
-    echo "vklayer-run: dlssnr-helper is not on PATH; running the game without the layer" >&2
+    log "dlssnr-helper is not on PATH; running the game without the layer"
     exec "$@"
 fi
-
-runtime_dir="/tmp/dlssnr-$(id -u)"
-shm="$runtime_dir/shm.bin"
+gui="$(command -v dlssnr-gui || true)"
 shmctl="$(command -v dlssnr-shmctl || true)"
+shm="/tmp/dlssnr-$(id -u)/shm.bin"
 
 is_running() { "$helper" status 2>/dev/null | grep -q '^helper running'; }
 is_ready() {
-    # helper_state 4 = kHelperRunning: the helper has attached, built its
-    # Vulkan context and is waiting for frames. Anything else is still starting.
+    # helper_state 4 = kHelperRunning: attached, Vulkan context built, waiting
+    # for frames. Anything else is still starting.
     [ -n "$shmctl" ] && [ -f "$shm" ] && "$shmctl" "$shm" status 2>/dev/null | grep -q '^helper_state=4$'
 }
 
-started_here=0
+# --- 1. the helper --------------------------------------------------------------
+started_helper=0
 if is_running; then
-    echo "vklayer-run: helper already running; leaving it as it is when the game exits" >&2
+    log "helper already running; it stays up when the game exits"
 else
     DLSSNR_TIME="${DLSSNR_TIME:-1}" "$helper" start >/dev/null 2>&1 || {
-        echo "vklayer-run: dlssnr-helper start failed; running the game without the layer" >&2
+        log "dlssnr-helper start failed; running the game without the layer"
         exec "$@"
     }
-    started_here=1
-    # A first start builds a Proton prefix; give it a minute. The layer copes
-    # with a helper that is still starting (frames pass through until it
-    # answers), so a timeout here only costs the first seconds of the game.
+    started_helper=1
+    # The layer copes with a helper that is still starting (frames pass
+    # through until it answers), so a timeout here only costs the first
+    # seconds of the game.
     for _ in $(seq 1 120); do
         is_ready && break
         sleep 0.5
     done
-    if is_ready; then
-        echo "vklayer-run: helper ready" >&2
+    if is_ready; then log "helper ready"; else log "helper not ready after 60 s; frames pass through until it is"; fi
+fi
+
+# --- 2. the GUI -----------------------------------------------------------------
+# Launched with the desktop session's environment, not Steam's: Steam's launch
+# environment carries its overlay in LD_PRELOAD and its runtime's library
+# paths, neither of which a system Qt application should inherit.
+gui_pid=""
+if [ "${DLSSNR_GUI:-1}" != 0 ] && [ -n "$gui" ]; then
+    if pgrep -x dlssnr-gui >/dev/null 2>&1; then
+        log "dlssnr-gui already open; leaving it"
     else
-        echo "vklayer-run: helper not ready after 60 s; the game will pass frames through until it is" >&2
+        keep=()
+        for v in HOME USER LOGNAME SHELL LANG LC_ALL DISPLAY WAYLAND_DISPLAY XAUTHORITY \
+                 XDG_RUNTIME_DIR XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP \
+                 XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_DATA_DIRS \
+                 DBUS_SESSION_BUS_ADDRESS QT_QPA_PLATFORMTHEME QT_STYLE_OVERRIDE GTK_THEME \
+                 DLSSNR_SHM DLSSNR_LOG; do
+            [ -n "${!v:-}" ] && keep+=("$v=${!v}")
+        done
+        keep+=("PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin")
+        setsid env -i "${keep[@]}" "$gui" >/dev/null 2>&1 &
+        gui_pid=$!
+        log "dlssnr-gui opened (pid $gui_pid) -- minimise it, do not close it: closing stops the helper"
     fi
 fi
 
+# --- 3. the game ------------------------------------------------------------------
 export VKLayer_DLSS5=1
 "$@"
 rc=$?
+log "game exited ($rc)"
 
-if [ "$started_here" = 1 ] && [ "${DLSSNR_KEEP:-0}" != 1 ]; then
-    "$helper" stop >/dev/null 2>&1
-    echo "vklayer-run: game exited ($rc); helper stopped" >&2
+# --- 4. tidy up -------------------------------------------------------------------
+if [ "${DLSSNR_KEEP:-0}" != 1 ]; then
+    if [ -n "$gui_pid" ] && kill -0 "$gui_pid" 2>/dev/null; then
+        # SIGTERM ends the Qt process without its close handler, so this does
+        # not race the helper stop below with a second one.
+        kill -TERM "$gui_pid" 2>/dev/null
+        log "dlssnr-gui closed"
+    fi
+    if [ "$started_helper" = 1 ]; then
+        # dlssnr-helper stop asks the helper to quit and then polls for its
+        # processes by reading every /proc/*/cmdline through a subprocess, in
+        # loops: minutes on a busy machine, all of it after the helper has
+        # already died. Steam waits for this wrapper, so the stop runs
+        # detached and the game shows as exited at once. The helper itself is
+        # gone within a second of the quit flag; the rest is bookkeeping.
+        setsid "$helper" stop >/dev/null 2>&1 < /dev/null &
+        log "helper stop requested (dlssnr-helper stop finishes in the background)"
+    fi
 fi
 exit $rc

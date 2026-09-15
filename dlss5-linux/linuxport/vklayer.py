@@ -85,8 +85,10 @@ CONTROLS = [
     "stalled the present thread ~122 ms once a second (upstream #12).",
     "A/B without a second run: set compare 1 (split screen) or hold 1 (freeze the model's input)",
     "the helper is a daemon that spins ~18% of one core while idle, and the layer never starts or stops it: "
-    "put `vklayer-run` in front of %command% (launch-options --vklayer does) and it starts the helper before "
-    "the game and stops it after. Without the wrapper: `vklayer start` before, `vklayer stop` after.",
+    "put `vklayer-run` in front of %command% (launch-options --vklayer does) and it starts the helper, opens "
+    "dlssnr-gui beside the game (alt-tab to it; minimise, never close: closing stops the helper), and stops "
+    "both after. DLSSNR_GUI=0 skips the window, DLSSNR_KEEP=1 keeps everything up. Without the wrapper: "
+    "`vklayer start` before, `vklayer stop` after.",
 ]
 
 
