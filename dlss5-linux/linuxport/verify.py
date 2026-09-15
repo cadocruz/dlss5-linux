@@ -4,8 +4,45 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from core import diagnose
+from core import diagnose, installer as _inst, pe as _pe
 from . import proton
+
+# The runtimes a route swaps, and what the install record calls each one.
+_RUNTIMES = ((_inst.DLSS, "dlss", "dlss runtime"),
+             (_inst.DLSSD, "dlssd", "ray reconstruction"),
+             (_inst.DLSSG, "dlssg", "frame generation"))
+
+
+def _runtime_rows(root: Path, man: dict) -> list[tuple[str, str, str]]:
+    """Does the runtime on disk still match the one the install recorded?
+
+    installer says "310.2.1 -> 310.9.1" while it writes the file, and that log
+    line was the only place the number was ever shown - so a launcher that
+    verifies its files and quietly puts the old runtime back went unnoticed
+    until the next install happened to say so. Reading the file at verify time
+    is where that belongs, and it is possible here at all only because
+    file_version now works off Windows.
+
+    Compared as numbers through installer._ver: the record carries a catalog
+    label ("310.9.1 (NVIDIA SDK)"), the file carries a version ("310.9.1").
+    """
+    out: list[tuple[str, str, str]] = []
+    comp = man.get("components") or {}
+    for name, key, title in _RUNTIMES:
+        label = str(comp.get(key) or "")
+        if not label or not (root / name).is_file():
+            continue
+        disk = _pe.file_version(root / name)
+        if not disk:
+            continue                       # no version resource: nothing to compare
+        if _inst._ver(disk) == _inst._ver(label):
+            out.append(("OK", title, f"{disk} on disk, as recorded"))
+        else:
+            out.append(("WARN", title,
+                        f"{disk} on disk, but the record says {label} -- something "
+                        f"replaced it since the install (a launcher's file check "
+                        f"will), so reinstall the route or run: dlls <game> install"))
+    return out
 
 BENIGN = ("queryNvapi", "XeSSFeature::LogCallback", "streamlineLogCallback",
           "NGX Updater not available",
@@ -64,6 +101,7 @@ def run(g, rep=None) -> list[tuple[str, str, str]]:
 
     # --- Proton -----------------------------------------------------------
     man = diagnose._manifest(root)
+    out += _runtime_rows(root, man)
     proxy = man.get("proxy") or ""
     xl = proton.is_xlcore(g)
     cur = proton.launcher_overrides(g) if xl else proton.current_launch_options(g)

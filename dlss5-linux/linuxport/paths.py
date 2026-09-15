@@ -18,6 +18,18 @@ from pathlib import Path
 
 from core import diagnose, library, log, net, prefs, profiles, sources
 
+# core.watch reads the running game's module list through the Windows process
+# API and imports ctypes.wintypes at module level, so on Linux it does not
+# import at all - diagnose/evidence.py calls it inside try/except for exactly
+# that reason. Its RECORD constant still names LOCALAPPDATA, which here falls
+# back to Path.home() and would put a dlss5-autopilot/ folder in the root of
+# $HOME. Nothing reaches it while the import fails; this is here so that the
+# day a Linux backend makes watch importable, the path is already right.
+try:
+    from core import watch
+except Exception:                              # pragma: no cover - Linux: always
+    watch = None
+
 APP = "dlss5-linux"
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / APP
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP
@@ -42,6 +54,8 @@ def install() -> None:
     profiles.DIR = CONFIG / "profiles"
     library.FILE = CONFIG / "library.json"
     log.DIR = STATE
+    if watch is not None:
+        watch.RECORD = STATE / "sightings.json"
     # STANDALONE_LOG lives on diagnose.model since upstream 1.9.0 split diagnose
     # into a package, and its __init__ deliberately does NOT re-export it: a copy
     # on the package would be a value that looks right and is not the one the

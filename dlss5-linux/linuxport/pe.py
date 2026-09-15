@@ -8,6 +8,7 @@ native/upstream/optiscaler need the DX12 label.
 """
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 from core import dlss, pe as _pe
@@ -51,6 +52,7 @@ def _has_d3d12_agility_sdk(folder: Path) -> bool:
 
 def install() -> None:
     _pe._has_d3d12_agility_sdk = _has_d3d12_agility_sdk
+    _pe.file_version = file_version
     install_api()
 
 
@@ -121,3 +123,91 @@ def detect_api(path: Path) -> tuple[str, str]:
 
 def install_api() -> None:
     _pe.detect_api = detect_api
+
+
+# --- the version stamped in a DLL ---------------------------------------------
+# Upstream reads it through Windows' version API and returns "" anywhere else
+# (core/pe.py: `if os.name != "nt": return ""`), so on Linux the four
+# "was -> now" lines in installer.py print only the build they just wrote, and
+# the point of printing both - noticing that a launcher quietly put the old
+# runtime back - is gone.
+#
+# The number is not in the API though, it is in the file. VS_FIXEDFILEINFO
+# lives in the resource section, and core/pe.py already knows what it looks
+# like: it checks the same signature after Windows hands it the block.
+#
+# Finding it without walking the resource tree is what optiscaler.is_optiscaler
+# does one module over, for the same reason ("Version resources are UTF-16, so
+# looking for the name in that encoding finds it without a full resource
+# walk"). Bounding the search to .rsrc is what keeps it honest: the same eight
+# bytes appearing in code or in an embedded file cannot answer.
+
+# The block's first two DWORDs are fixed: the signature 0xFEEF04BD, then a
+# struct version that has been 1.0 since the format was defined. Matching both
+# is what makes scanning safe - a four-byte signature alone could fall anywhere.
+_FIXED_INFO = bytes([0xBD, 0x04, 0xEF, 0xFE, 0x00, 0x00, 0x01, 0x00])
+
+# A resource section is normally well under a megabyte. The cap is here so a
+# malformed header cannot ask for an arbitrary allocation; a real .rsrc that
+# large has worse problems than a missing version string.
+_RSRC_MAX = 64 << 20
+
+
+def _rsrc(path: Path) -> bytes:
+    """The raw bytes of the .rsrc section, or b"".
+
+    Read on its own rather than with the whole file. These are game DLLs -
+    pulling eighty megabytes into memory to find eight bytes is the kind of
+    thing that makes scanning a library feel broken.
+    """
+    with path.open("rb") as fh:
+        if fh.read(2) != b"MZ":
+            return b""
+        fh.seek(0x3C)
+        raw = fh.read(4)
+        if len(raw) < 4:
+            return b""
+        pe_at = struct.unpack("<I", raw)[0]
+        fh.seek(pe_at)
+        if fh.read(4) != b"PE" + bytes(2):
+            return b""
+        coff = fh.read(20)
+        if len(coff) < 20:
+            return b""
+        sections = struct.unpack_from("<H", coff, 2)[0]
+        opt_size = struct.unpack_from("<H", coff, 16)[0]
+        fh.seek(pe_at + 24 + opt_size)
+        for _ in range(sections):
+            row = fh.read(40)
+            if len(row) < 40:
+                return b""
+            if row[:8].rstrip(bytes(1)) != b".rsrc":
+                continue
+            size, at = struct.unpack_from("<II", row, 16)
+            if not size or size > _RSRC_MAX:
+                return b""
+            fh.seek(at)
+            return fh.read(size)
+    return b""
+
+
+def file_version(path) -> str:
+    """"310.8.0" - the version stamped in a DLL, or "" if it has none.
+
+    The same string upstream's Windows path returns, trailing zero included:
+    NVIDIA writes 310.8.0 as 310.8.0.0 and nobody calls it that. "" for
+    anything unreadable, because no version is not an error - plenty of DLLs
+    carry no version resource at all.
+    """
+    try:
+        blob = _rsrc(Path(path))
+        at = blob.find(_FIXED_INFO)
+        if at < 0:
+            return ""
+        ms, ls = struct.unpack_from("<II", blob, at + 8)
+        parts = [ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF]
+        while len(parts) > 3 and parts[-1] == 0:
+            parts.pop()
+        return ".".join(str(n) for n in parts)
+    except (OSError, struct.error, ValueError):
+        return ""
