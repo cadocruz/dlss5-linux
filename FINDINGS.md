@@ -197,8 +197,19 @@ route, which does not enter the process at all.
 * **0.3.0-3 (2026-09-15) adds an idle repaint.** When the game stops
   presenting (paused, occluded, alt-tabbed) a layer thread acquires a
   swapchain image itself and re-composes the held frame, so settings changes
-  show while the picture is still; `DLSSNR_IDLE_REPAINT=0` turns it off. New
-  on a vkd3d-proton swapchain here; untested at the time of writing.
+  show while the picture is still; `DLSSNR_IDLE_REPAINT=0` turns it off.
+  Works on FF7 Remake under vkd3d-proton: with the game paused, intensity
+  changes from `dlssnr-shmctl` reached the helper (it logs the retune and the
+  rebuild) and the helper evaluated ~700 frames more than the layer presented,
+  which are the repaints. The layer's request for `VK_EXT_swapchain_maintenance1`
+  at device creation is refused by vkd3d-proton's device (feature not present)
+  and it retries with the game's own list; the repaint still worked without it.
+* **SDR run, the intended path.** Same game, same resolution, SDR: the
+  composition was built twice in 10,411 frames (once per swapchain) instead of
+  once per frame, which confirms the rebuild bug is HDR10-only. Cost medians
+  over 370 samples: encode 4.28, wait 10.59, total 15.02 ms; helper evaluate
+  9.31 ms. SDR saves about half a millisecond of encode; the model costs the
+  same, so `workingscale` remains the lever.
 * **Native Linux Vulkan, smoke-tested.** `VKLayer_DLSS5=1 vkcube` put 1,830
   frames through the model at 500x500: the layer, transport and helper work
   for a native Vulkan process, not only for Proton. No real native game yet.

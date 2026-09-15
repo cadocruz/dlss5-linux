@@ -19,8 +19,8 @@ real depth, before the UI, integrated with the upscaler. This route is
 post-present (the HUD gets the model too), uses optical-flow vectors and zero
 depth, and does not upscale.
 
-Measured 2026-09-10/13: RTX 5090, NVIDIA 615.71, CachyOS, proton-cachyos-slr
-as the helper's runner, DLSS5VKLayer 0.2.6-2 through 0.3.0-2, FF7 Remake at
+Measured 2026-09-10/14: RTX 5090, NVIDIA 615.71, CachyOS, proton-cachyos-slr
+as the helper's runner, DLSS5VKLayer 0.2.6-2 through 0.3.0-3, FF7 Remake at
 5120x1440. Upstream ships most days. Run 0.3.0-2 or newer: 0.2.6-3 stopped a
 1x1 probe swapchain from building a model and hanging the GPU with Xid 109 on
 the first submit, and 0.3.0-2 fixed the hotkey stall noted under Controls.
@@ -133,7 +133,13 @@ per-frame rebuild described below.
    defaults to 1.0; cost scales with area, so 0.5 puts the model near 2.5 ms.
 5. The "core" NGX init answering `0xbad00002` and the `[param-miss]
    DLSSNR.*Subrect*` lines in the helper log are expected.
-6. **The helper is a daemon and it is not free while idle.** It must be running
+6. **Idle repaint (0.3.0-3+) works under vkd3d-proton.** Pause the game and
+   change a setting; the layer re-composes the held frame through the helper
+   (visible in `helper.log` as a retune + rebuild, and as helper frames beyond
+   the layer's presents). `DLSSNR_IDLE_REPAINT=0` turns it off. The layer's
+   request for `VK_EXT_swapchain_maintenance1` is refused by vkd3d-proton's
+   device and retried without; harmless.
+7. **The helper is a daemon and it is not free while idle.** It must be running
    before the game starts, it outlives the game, and its wait loop spins on
    the shared-memory counter (20,000 yields, then a 1 ms sleep, repeat): about
    18% of one core, continuously, with no game running, plus a Vulkan device
