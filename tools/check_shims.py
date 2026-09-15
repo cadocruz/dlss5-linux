@@ -62,16 +62,25 @@ class Result:
     checked_modules: set[str] = field(default_factory=set)
 
 
-def _core_aliases(tree: ast.Module) -> dict[str, str]:
-    """alias -> core module name, from `from core import x as y` / `import core.x`."""
+def _core_aliases(tree: ast.Module, core_dir: Path | None = None) -> dict[str, str]:
+    """alias -> core module name, from `from core import x as y`, `import core.x`,
+    or `from core.pkg import submodule` (which needs core_dir to be recognised)."""
     aliases: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "core":
             for a in node.names:
                 aliases[a.asname or a.name] = a.name
         elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("core."):
-            # `from core.installer import X` -> X is a direct symbol use
-            pass
+            # `from core.installer import X` -> X is a direct symbol use, and
+            # _direct_uses records it. But `from core.diagnose import model` is
+            # a submodule, and `model.<name>` after it is a core symbol use two
+            # levels down - the only way to reach a name diagnose/__init__ lists
+            # in PATCHED, since those deliberately are not on the package. Tell
+            # them apart by looking: a submodule is a file.
+            pkg = node.module.split(".", 1)[1]
+            for a in node.names:
+                if core_dir is not None and (core_dir / pkg / f"{a.name}.py").is_file():
+                    aliases[a.asname or a.name] = f"{pkg}.{a.name}"
         elif isinstance(node, ast.Import):
             for a in node.names:
                 if a.name.startswith("core."):
@@ -151,7 +160,11 @@ def package_names(pkg_dir: Path) -> set[str]:
 
 
 def module_names(core_dir: Path, module: str) -> set[str] | None:
-    """Top-level names of core/<module>.py, or of core/<module>/ as a package."""
+    """Top-level names of core/<module>.py, of core/<module>/ as a package, or
+    of core/<pkg>/<sub>.py when the module name is dotted."""
+    if "." in module:
+        sub = core_dir.joinpath(*module.split("."))
+        return top_level_names(sub.with_suffix(".py")) if sub.with_suffix(".py").is_file() else None
     mp = core_dir / f"{module}.py"
     if mp.is_file():
         return top_level_names(mp)
@@ -161,9 +174,9 @@ def module_names(core_dir: Path, module: str) -> set[str] | None:
     return None
 
 
-def uses_in(path: Path) -> list[Use]:
+def uses_in(path: Path, core_dir: Path | None = None) -> list[Use]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    aliases = _core_aliases(tree)
+    aliases = _core_aliases(tree, ENGINE / "core" if core_dir is None else core_dir)
     guards = _hasattr_guards(tree, aliases)
     try:
         rel = str(path.relative_to(ROOT))
@@ -274,7 +287,7 @@ def check(core_dir: Path, linux_files: list[Path] | None = None) -> Result:
     for f in (LINUX_FILES if linux_files is None else linux_files):
         if not f.is_file():
             continue
-        for use in uses_in(f):
+        for use in uses_in(f, core_dir):
             res.uses.append(use)
             if use.module not in cache:
                 cache[use.module] = module_names(core_dir, use.module)
