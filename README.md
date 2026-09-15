@@ -119,7 +119,8 @@ its `launcher.ini` overrides are written by `launch-options --apply`.
   `dlls <game> restore` undoes it. NVIDIA publishes the three files in its
   own repository (tag `v310.9.1` at the time of writing, under
   `lib/Windows_x86_64/rel/`); a zip of them next to the tools is picked up as
-  the newest source. 310.9.1 is staged here but has not yet been run on a game.
+  the newest source. 310.9.1 is verified on 007 First Light (dlss: true, NR at
+  5120x1440 DLAA, ~6 ms).
 * The neural-rendering runtime, `nvngx_dlssnr.dll`, is not in any SDK and
   not shipped here. Know which build you have by hash: the NVIDIA-signed 310.8
   for RTX 50 is `e16bcf15...`, ShortFuse's cross-generation build for RTX
