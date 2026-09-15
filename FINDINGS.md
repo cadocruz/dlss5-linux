@@ -186,6 +186,19 @@ route, which does not enter the process at all.
   whether or not neural rendering was enabled (upstream #12). Reproduced here,
   16 nodes, 122 ms per rescan. 0.3.0-2 remembers which nodes are not keyboards
   and only stats them afterwards: 0.01 ms per pass here.
+* **The helper is a daemon, and idling is not free.** `dlssnr-helper start`
+  leaves it up after the game exits; only `dlssnr-helper stop` or closing the
+  GUI ends it. Its wait loop spins on the shared-memory counter (20,000 yields,
+  then a 1 ms sleep, repeat), which costs about 18% of one core continuously
+  with no game running, plus a Vulkan device and ~35 MiB of VRAM (measured on
+  0.3.0-3). If a background process is hogging a core after you finish
+  playing, this is it. `vklayer stop` in the port; a backoff to a longer
+  sleep after a moment of idleness would fix it upstream.
+* **0.3.0-3 (2026-09-15) adds an idle repaint.** When the game stops
+  presenting (paused, occluded, alt-tabbed) a layer thread acquires a
+  swapchain image itself and re-composes the held frame, so settings changes
+  show while the picture is still; `DLSSNR_IDLE_REPAINT=0` turns it off. New
+  on a vkd3d-proton swapchain here; untested at the time of writing.
 * **Native Linux Vulkan, smoke-tested.** `VKLayer_DLSS5=1 vkcube` put 1,830
   frames through the model at 500x500: the layer, transport and helper work
   for a native Vulkan process, not only for Proton. No real native game yet.

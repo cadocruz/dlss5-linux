@@ -133,5 +133,10 @@ per-frame rebuild described below.
    defaults to 1.0; cost scales with area, so 0.5 puts the model near 2.5 ms.
 5. The "core" NGX init answering `0xbad00002` and the `[param-miss]
    DLSSNR.*Subrect*` lines in the helper log are expected.
-6. The helper must be running before the game starts, and it is stopped by
-   closing the GUI or by `dlssnr-helper stop`.
+6. **The helper is a daemon and it is not free while idle.** It must be running
+   before the game starts, it outlives the game, and its wait loop spins on
+   the shared-memory counter (20,000 yields, then a 1 ms sleep, repeat): about
+   18% of one core, continuously, with no game running, plus a Vulkan device
+   and ~35 MiB of VRAM (measured on 0.3.0-3). Stop it when you are done:
+   `dlssnr-helper stop`, `dlss5_linux.py vklayer stop`, or close `dlssnr-gui`,
+   which stops it too. Nothing in the layer or the helper stops it for you.

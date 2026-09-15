@@ -81,6 +81,8 @@ CONTROLS = [
     "(evdev: your user in the 'input' group). Needs DLSS5VKLayer 0.3.0-2 or newer: before it a bound key "
     "stalled the present thread ~122 ms once a second (upstream #12).",
     "A/B without a second run: set compare 1 (split screen) or hold 1 (freeze the model's input)",
+    "when done playing: `dlss5_linux.py vklayer stop` (or close dlssnr-gui). The helper is a daemon and its idle "
+    "wait spins ~18% of one core until it is stopped.",
 ]
 
 
@@ -214,6 +216,9 @@ def verify(g) -> list[tuple[str, str, str]]:
         out.append(("INFO", "overrides", f'WINEDLLOVERRIDES="{stale}" is still set with no in-process payload; harmless, remove when convenient'))
     out.append(("OK" if helper_running() else "BAD", "helper",
                 "running" if helper_running() else "not running -- dlssnr-helper start (it must be up before the game)"))
+    if helper_running():
+        out.append(("INFO", "helper idle cost", "the helper is a daemon: it outlives the game and its wait loop spins "
+                    "~18% of one core with no frames coming (measured on 0.3.0-3). `vklayer stop` after playing."))
     digest, label = runtime()
     lvl = "OK" if digest and digest.startswith("e16bcf15") or digest and digest.startswith("e67dee20") else ("WARN" if digest else "BAD")
     out.append((lvl, "NR runtime", f"{label}" + (f"  sha256 {digest[:12]}..." if digest else "")))
