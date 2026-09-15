@@ -30,6 +30,14 @@ set -u
 
 log() { echo "vklayer-run: $*" >&2; }
 
+# Steam launches this wrapper with its overlay in LD_PRELOAD. That belongs to
+# the game and nothing else: with it inherited, the helper's Proton start took
+# 35 s here instead of 2 (the overlay hooks every one of those processes and
+# waits on Steam), and its processes were counted by Steam as SteamVR activity.
+# So the wrapper's own children run without it, and the game gets it back.
+game_preload="${LD_PRELOAD:-}"
+unset LD_PRELOAD
+
 helper="$(command -v dlssnr-helper || true)"
 if [ -z "$helper" ]; then
     log "dlssnr-helper is not on PATH; running the game without the layer"
@@ -92,7 +100,11 @@ fi
 
 # --- 3. the game ------------------------------------------------------------------
 export VKLayer_DLSS5=1
-"$@"
+if [ -n "$game_preload" ]; then
+    LD_PRELOAD="$game_preload" "$@"
+else
+    "$@"
+fi
 rc=$?
 log "game exited ($rc)"
 

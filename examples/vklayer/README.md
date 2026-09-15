@@ -69,8 +69,10 @@ reaches the settings while you play (`DLSSNR_GUI=0` to skip; the GUI gets the
 desktop session's environment, not Steam's, so it is a normal window), exports
 the enable token, runs the game, then closes the GUI it opened and stops the
 helper it started (`DLSSNR_KEEP=1` keeps both; anything already running is
-left alone). Minimise the GUI while playing, do not close it: its close button
-stops the helper. Steam launch options:
+left alone). The wrapper strips Steam's overlay preload from everything it
+starts and hands it back to the game only: inherited, it made the helper take
+35 s to come up. Minimise the GUI while playing, do not close it: its close
+button stops the helper. Steam launch options:
 
 ```text
 /path/to/dlss5-linux/vklayer-run %command%
