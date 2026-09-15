@@ -60,7 +60,21 @@ copied patched build that works but is not the one to give a helper.
 
 ## Enable it for a game
 
-Steam launch options, and nothing else:
+The layer never starts its helper, and the helper never stops on its own (it
+is a daemon whose wait loop costs ~18% of a core while idle). `vklayer-run`,
+beside the port, does both around one game: it runs on the host before the
+game's command, starts the helper if it is not up, waits until it reports
+ready, exports the enable token, runs the game, and stops the helper when the
+game exits (`DLSSNR_KEEP=1` keeps it; a helper that was already running is
+left alone). Steam launch options:
+
+```text
+/path/to/dlss5-linux/vklayer-run %command%
+```
+
+`launch-options <game> --vklayer` prints exactly that line, with the real
+path, and `--apply` writes it while Steam is closed. The bare form still works
+if you would rather manage the helper yourself:
 
 ```text
 VKLayer_DLSS5=1 %command%
@@ -73,7 +87,7 @@ in-process route, remove that payload first (`dlss5_proton.py restore
 harmless once the files are gone. `PROTON_LOG=1 PROTON_DEBUG_DIR=$HOME` keeps
 the layer's own lines in `~/steam-<appid>.log`, which `verify --vklayer` reads.
 
-For a native Linux game: `VKLayer_DLSS5=1 ./game`, same token.
+For a native Linux game: `vklayer-run ./game` (or `VKLayer_DLSS5=1 ./game` with the helper started by hand).
 
 ## Controls
 
@@ -145,4 +159,5 @@ per-frame rebuild described below.
    18% of one core, continuously, with no game running, plus a Vulkan device
    and ~35 MiB of VRAM (measured on 0.3.0-3). Stop it when you are done:
    `dlssnr-helper stop`, `dlss5_linux.py vklayer stop`, or close `dlssnr-gui`,
-   which stops it too. Nothing in the layer or the helper stops it for you.
+   which stops it too. Nothing in the layer or the helper stops it for you;
+   `vklayer-run` in the launch options does.

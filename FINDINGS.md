@@ -192,8 +192,12 @@ route, which does not enter the process at all.
   then a 1 ms sleep, repeat), which costs about 18% of one core continuously
   with no game running, plus a Vulkan device and ~35 MiB of VRAM (measured on
   0.3.0-3). If a background process is hogging a core after you finish
-  playing, this is it. `vklayer stop` in the port; a backoff to a longer
-  sleep after a moment of idleness would fix it upstream.
+  playing, this is it. The layer does not start the helper either: without
+  one running, every frame passes through. The port's `vklayer-run` wrapper,
+  put in front of `%command%`, starts the helper before the game, waits for
+  it to report ready, and stops it when the game exits; `launch-options
+  --vklayer` emits that form. A backoff to a longer sleep after a moment of
+  idleness would fix the cost upstream.
 * **0.3.0-3 (2026-09-15) adds an idle repaint.** When the game stops
   presenting (paused, occluded, alt-tabbed) a layer thread acquires a
   swapchain image itself and re-composes the held frame, so settings changes

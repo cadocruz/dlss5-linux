@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# vklayer-run -- run one game on the DLSS5VKLayer route and leave nothing behind.
+#
+#   steam launch options:   /path/to/vklayer-run %command%
+#   native game:            vklayer-run ./game
+#
+# The layer (VK_LAYER_NV_dlssnr) never starts its helper: if dlssnr_helper.exe
+# is not already running, every frame passes through untouched. And the helper
+# never stops on its own: it is a daemon whose wait loop spins ~18% of one core
+# for as long as it lives. So neither end of the session is automatic. This
+# wrapper does both -- it runs on the host, outside Steam's container, before
+# the game's own command, which is how mangohud and gamemoderun get in too.
+#
+#   1. start the helper if it is not running, and wait until it says it is
+#      ready (the first start also builds its own Proton prefix: up to a
+#      minute; a later one: a few seconds);
+#   2. export the layer's enable token and run the game, waiting for it;
+#   3. stop the helper -- unless DLSSNR_KEEP=1, or it was already running
+#      when this wrapper started (then it was somebody else's to stop).
+#
+# DLSSNR_TIME=1 is set for the helper so its per-frame timing lands in
+# helper.log, which `dlss5_linux.py verify --vklayer` reads. Everything else
+# (DLSSNR_IDLE_REPAINT=0, DLSSNR_TOGGLE_KEY=F10, ...) passes through from the
+# launch options as usual.
+set -u
+
+helper="$(command -v dlssnr-helper || true)"
+if [ -z "$helper" ]; then
+    echo "vklayer-run: dlssnr-helper is not on PATH; running the game without the layer" >&2
+    exec "$@"
+fi
+
+runtime_dir="/tmp/dlssnr-$(id -u)"
+shm="$runtime_dir/shm.bin"
+shmctl="$(command -v dlssnr-shmctl || true)"
+
+is_running() { "$helper" status 2>/dev/null | grep -q '^helper running'; }
+is_ready() {
+    # helper_state 4 = kHelperRunning: the helper has attached, built its
+    # Vulkan context and is waiting for frames. Anything else is still starting.
+    [ -n "$shmctl" ] && [ -f "$shm" ] && "$shmctl" "$shm" status 2>/dev/null | grep -q '^helper_state=4$'
+}
+
+started_here=0
+if is_running; then
+    echo "vklayer-run: helper already running; leaving it as it is when the game exits" >&2
+else
+    DLSSNR_TIME="${DLSSNR_TIME:-1}" "$helper" start >/dev/null 2>&1 || {
+        echo "vklayer-run: dlssnr-helper start failed; running the game without the layer" >&2
+        exec "$@"
+    }
+    started_here=1
+    # A first start builds a Proton prefix; give it a minute. The layer copes
+    # with a helper that is still starting (frames pass through until it
+    # answers), so a timeout here only costs the first seconds of the game.
+    for _ in $(seq 1 120); do
+        is_ready && break
+        sleep 0.5
+    done
+    if is_ready; then
+        echo "vklayer-run: helper ready" >&2
+    else
+        echo "vklayer-run: helper not ready after 60 s; the game will pass frames through until it is" >&2
+    fi
+fi
+
+export VKLayer_DLSS5=1
+"$@"
+rc=$?
+
+if [ "$started_here" = 1 ] && [ "${DLSSNR_KEEP:-0}" != 1 ]; then
+    "$helper" stop >/dev/null 2>&1
+    echo "vklayer-run: game exited ($rc); helper stopped" >&2
+fi
+exit $rc

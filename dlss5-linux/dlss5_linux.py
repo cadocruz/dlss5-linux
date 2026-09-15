@@ -208,8 +208,13 @@ def cmd_launch_options(args) -> int:
         if stale and on:
             print(f'  note    : WINEDLLOVERRIDES="{stale}" is still there with no in-process payload; harmless')
         if on:
-            print(f"  helper  : {'running' if vklayer.helper_running() else 'not running -- dlssnr-helper start before the game'}"
-                  + ("" if vklayer.installed() else f"   !! layer not installed: {vklayer.UPSTREAM}"))
+            if vklayer.WRAPPER.is_file():
+                print("  helper  : started by vklayer-run when the game launches, stopped when it exits "
+                      "(DLSSNR_KEEP=1 to keep it; it idles at ~18% of a core otherwise)")
+            else:
+                print(f"  helper  : {'running' if vklayer.helper_running() else 'not running -- dlssnr-helper start before the game'}")
+            if not vklayer.installed():
+                print(f"  !! layer not installed: {vklayer.UPSTREAM}")
             for c in vklayer.CONTROLS[:1]:
                 print(f"  note    : {c}")
         if args.apply:
