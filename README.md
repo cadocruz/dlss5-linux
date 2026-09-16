@@ -103,6 +103,12 @@ NVIDIA driver holding `nvngx_dlssnr.dll`. Components are downloaded from their
 own publishers at run time as they always were, and archives you keep by hand
 go in `$DLSS5_COMPONENTS_DIR` (default `~/.local/share/dlss5-linux/components`).
 
+It also expects the graphics stack to be the machine's, not its own -
+`libEGL.so.1` and `libGL.so.1` are deliberately not in the package, because on
+an NVIDIA system those have to be the driver's. Any desktop already has them,
+along with `libX11`, `libxkbcommon`, `libdbus-1`, `libglib-2.0`, `libfontconfig`
+and `libfreetype`; a bare server image does not, and the window will say so.
+
 Two things it is careful about. Everything it runs - `wine`, `protontricks`,
 `nvidia-smi`, `flatpak` - runs with your environment, not the bundle's. And
 `launch-options --vklayer` writes a path that outlives the AppImage's mount

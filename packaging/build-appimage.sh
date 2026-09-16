@@ -106,6 +106,20 @@ rm -rf "$QT/translations" "$SITE/PySide6/scripts" "$SITE/PySide6/glue" \
        "$SITE/PySide6/include" "$SITE/shiboken6/include" 2>/dev/null || true
 find "$SITE" -name '*.pyi' -delete 2>/dev/null || true
 
+# Plugins for things this is not. They are dlopen'd on demand and would never
+# be opened, but each one carries its own NEEDED list - the SQL drivers alone
+# ask the host for libmysqlclient, libpq, libodbc and libmimerapi, none of
+# which anybody should have to install to run a DLSS installer. Removing the
+# QtSql library and leaving its drivers behind, which is what this did first,
+# is the worst of both.
+rm -rf "$QT/plugins/sqldrivers" "$QT/plugins/egldeviceintegrations" \
+       "$QT/plugins/platformthemes" "$QT/plugins/designer" \
+       "$QT/plugins/qmltooling" 2>/dev/null || true
+# Wayland: the CLIENT side stays, because people run Wayland. What goes is the
+# compositor - this application is not one.
+rm -f "$QT"/lib/libQt6WaylandCompositor.so* "$QT"/lib/libQt6WaylandEgl*.so* 2>/dev/null || true
+rm -rf "$QT/plugins/wayland-graphics-integration-server" 2>/dev/null || true
+
 # Qt 6.5+ wants libxcb-cursor at runtime and the wheels do not carry it. Beside
 # the other Qt libraries, where the platform plugin's RUNPATH ($ORIGIN/../../lib)
 # finds it - no environment variable, so nothing leaks to a Qt child.
@@ -116,6 +130,16 @@ for lib in libxcb-cursor.so.0 libxcb-xinerama.so.0; do
     else
         echo "!!  $lib not on this machine; install libxcb-cursor0 for a complete build" >&2
     fi
+done
+
+# python-build-standalone ships libpython with its debug symbols: 209 MB of
+# them, against 30 MB of library. They are not what a traceback is made of -
+# that comes from the code objects, and it prints the same function names and
+# line numbers either way, which was checked rather than assumed. They would
+# only matter for a gdb backtrace through a C-level crash in the interpreter,
+# which is not a thing this tool asks anybody to produce.
+find "$APPDIR/usr/python" -name '*.so' -o -name '*.so.*' | while read -r so; do
+    strip --strip-unneeded "$so" 2>/dev/null || true
 done
 
 # Never ours to ship: these must come from the machine's NVIDIA driver.
