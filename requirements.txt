@@ -1,0 +1,5 @@
+# QtCore, QtGui and QtWidgets are all this uses. The PySide6 meta-package
+# also pulls PySide6-Addons, whose libQt6WebEngineCore alone is 195 MB of
+# Chromium.
+PySide6-Essentials>=6.6
+certifi

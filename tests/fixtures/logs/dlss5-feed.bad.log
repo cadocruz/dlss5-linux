@@ -1,0 +1,4 @@
+[feed] dlss5-feed 0.14.0-beta.5 starting, provider=3
+[feed] MV probe 64x64 sample: 12% non-zero
+[feed] CreateFeature raised exception 0xC0000005 in D3D12Core.dll
+[feed] 3 frames: feed CPU 0.9 ms/frame ... 48 fps

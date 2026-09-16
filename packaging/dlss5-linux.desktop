@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=dlss5-linux
+GenericName=DLSS 5 for Proton games
+Comment=Pick the injection route for a game running under Proton, install it, and read the logs back
+Exec=dlss5-linux
+Icon=dlss5-linux
+Terminal=false
+Categories=Utility;Game;
+Keywords=dlss;neural;rendering;proton;steam;wine;nvidia;optiscaler;reshade;upscaling;
+StartupNotify=true
+StartupWMClass=dlss5-linux

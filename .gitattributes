@@ -1,0 +1,16 @@
+# Everything here runs on Linux, and two of these files are executed by a
+# shell. Checked out with CRLF - which git does by default on a Windows clone,
+# and which this repository has no reason to want anywhere - the shebang
+# becomes "#!/usr/bin/env bash\r" and the kernel answers "bad interpreter".
+#
+# vklayer-run is the one that matters most: the build copies it into the
+# AppImage verbatim and Steam runs it in front of the game, so a CRLF checkout
+# produces a package whose launch option fails at the moment somebody starts
+# playing. It happened - the first AppImage built here shipped exactly that.
+* text=auto eol=lf
+
+*.sh        text eol=lf
+AppRun      text eol=lf
+vklayer-run text eol=lf
+
+*.png binary

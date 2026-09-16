@@ -29,6 +29,14 @@ TARS = ("bsdtar", "tar")
 def commands(archive: Path, dest: Path) -> list[list[str]]:
     """Every way this machine could open a .7z, best first."""
     out: list[list[str]] = []
+    # A packaged build carries its own, and it goes first: the machines where
+    # that matters are the ones that cannot install anything. On SteamOS the
+    # error below names three package managers and not one of them is an
+    # option on a read-only root.
+    from . import bundled
+    own = bundled.seven_zip()
+    if own is not None:
+        out.append([str(own), "x", str(archive), f"-o{dest}", "-y"])
     sz = _opti._seven_zip()
     if sz is not None:
         out.append([str(sz), "x", str(archive), f"-o{dest}", "-y"])
