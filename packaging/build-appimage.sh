@@ -46,12 +46,14 @@ if ! command -v "${PYTHON:-}" >/dev/null 2>&1; then
     exit 1
 fi
 
+# PORT_VERSION, not LIBRARY_VERSION. The composite (1.9.0+linux0.2) is a cache
+# key and a field in a shared result, where naming the vendored core is the
+# point. A file name is a claim about whose release this is, and 1.9.0 is
+# DLSS5-Autopilot's. What ships here is the port.
 VERSION="$("$PYTHON" - <<'PY'
 import pathlib, re
 src = pathlib.Path("dlss5-linux/linuxport/features.py").read_text(encoding="utf8")
-port = re.search(r'PORT_VERSION\s*=\s*"([^"]+)"', src).group(1)
-core = pathlib.Path("dlss5-linux/core/update.py").read_text(encoding="utf8")
-print(f"{re.search(r'VERSION\s*=\s*.([0-9][^\"\x27]*)', core).group(1)}+linux{port}")
+print(re.search(r'PORT_VERSION\s*=\s*"([^"]+)"', src).group(1))
 PY
 )"
 OUT="${OUT:-$ROOT/dlss5-linux-${VERSION}-x86_64.AppImage}"
