@@ -121,6 +121,22 @@ def test_scan_all_adds_remembered_folders_once(monkeypatch, tmp_path):
     assert [g.name for g in lgames.scan_all()] == ["Steam Game"]
 
 
+def test_scan_all_does_not_list_remembered_library_roots_as_games(monkeypatch, tmp_path):
+    real = tmp_path / "APlagueTale"
+    real.mkdir()
+    library = tmp_path / "Heroic"
+    library.mkdir()
+    (library / "APlagueTale" / "bin").mkdir(parents=True)
+    steam = tmp_path / "Steam"
+    (steam / "steamapps").mkdir(parents=True)
+    bin_folder = tmp_path / "bin"
+    bin_folder.mkdir()
+    monkeypatch.setattr(lgames, "_orig_scan", lambda: [])
+    for folder in (real, library, steam, bin_folder):
+        lgames.remember_folder(folder)
+    assert [g.name for g in lgames.scan_all()] == ["APlagueTale"]
+
+
 def test_install_state_empty_installed_and_foreign(game, monkeypatch):
     assert lgames.install_state(game) == ("", "")
     d = game.install_dir

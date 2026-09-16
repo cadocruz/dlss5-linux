@@ -56,6 +56,27 @@ def install_scan() -> None:
 from core import installer as _inst, optiscaler as _opti, prefs as _prefs  # noqa: E402
 from pathlib import Path as _P  # noqa: E402
 
+# A manually chosen game folder is remembered by its exact path. Older runs
+# could also remember a library root (for example ~/Games/bin, ~/Games/Heroic
+# or ~/Games/Steam); scan_all() would then recurse into it, pick the first EXE
+# it found, and show the library itself as a game in the GUI. Keep these paths
+# usable for an explicit --target, but never present them as game entries.
+_LIBRARY_FOLDER_NAMES = {
+    "bin", "heroic", "steam", "steamlibrary", "steamapps", "common",
+    "compatdata", "epic games", "gog games", "games", "library",
+}
+_LIBRARY_MARKERS = ("steamapps", "libraryfolders.vdf", "compatdata")
+
+
+def _is_library_folder(folder: Path) -> bool:
+    low = folder.name.strip().lower()
+    if low in _LIBRARY_FOLDER_NAMES:
+        return True
+    try:
+        return any((folder / marker).exists() for marker in _LIBRARY_MARKERS)
+    except OSError:
+        return False
+
 
 def remember_folder(folder) -> None:
     _prefs.add_install(str(_P(folder).resolve()))
@@ -71,7 +92,8 @@ def scan_all() -> list:
     seen = {g.folder.resolve() for g in out}
     for f in _prefs.installs():
         p = _P(f)
-        if p.is_dir() and p.resolve() not in seen:
+        if (p.is_dir() and not _is_library_folder(p)
+                and p.resolve() not in seen):
             out.append(_games.Game(name=p.name, folder=p, source="Manual"))
             seen.add(p.resolve())
     return out
