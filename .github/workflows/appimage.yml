@@ -74,7 +74,15 @@ jobs:
       - name: Icon is the one the script draws
         run: python packaging/make_icon.py --check packaging/dlss5-linux.png
 
+      # GH_OWNER/GH_REPO end up inside the file, as the update information
+      # AppImageUpdate and Gear Lever read to find a newer build. Taken from
+      # the repository this actually ran in: hardcoded, a fork would ship an
+      # AppImage telling people to look for updates in somebody else's
+      # releases, where the file is not.
       - name: Build
+        env:
+          GH_OWNER: ${{ github.repository_owner }}
+          GH_REPO: ${{ github.event.repository.name }}
         run: bash packaging/build-appimage.sh
 
       # pins.lock is committed and is authority. A build that had to write one
