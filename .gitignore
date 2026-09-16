@@ -24,3 +24,11 @@ memory/
 build/
 *.AppImage
 *.AppImage.zsync
+
+# The test fixtures are named after exactly what the rules above keep out: the
+# old tool's real state file, and real logs. These are neither - they are small,
+# invented, and the suite cannot run without them. A clean clone got one of the
+# five, which nobody noticed until CI became the first thing ever to run the
+# tests somewhere other than a machine that already had them.
+!tests/fixtures/_dlss5_proton_state.json
+!tests/fixtures/logs/*.log

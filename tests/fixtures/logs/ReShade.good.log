@@ -1,0 +1,8 @@
+21:00:01:000 [12345] | INFO  | Initializing crosire's ReShade version '6.8.0' (64-bit) loaded from "Z:\games\Fixture\dxgi.dll"
+21:00:01:100 [12345] | INFO  | Loading add-on from "Z:\games\Fixture\renodx-dlss5++.addon64"
+21:00:02:000 [12345] | ERROR | Failed to hook NVSDK_NGX_D3D12_EvaluateFeature_C, falling back to plain entry
+21:00:02:100 [12345] | INFO  | signed DLSSNR 310.8.0 D3D12 runtime initialized
+21:00:03:000 [12345] | INFO  | Streamline interposer not found among loaded modules
+21:00:03:500 [12345] | INFO  | feature 1 created (DLAA) for NR input 2560x1440
+21:00:03:600 [12345] | INFO  | NR upscaling is not applicable: game renders at output resolution
+21:00:04:000 [12345] | INFO  | feature 2 created (DLAA) for NR input 3840x2160

@@ -1,0 +1,12 @@
+[2026-09-06 21:00:01.001] [I] OptiScaler v10.0.0-pre1 loaded as winmm.dll
+[2026-09-06 21:00:01.002] [I] Upscaler support - fsr4: false, dlss: true
+[2026-09-06 21:00:01.010] [E] queryNvapi Failed the first time, retrying
+[2026-09-06 21:00:01.020] [I] D3D12 interop device created on adapter NVIDIA GeForce RTX 5090
+[2026-09-06 21:00:02.000] [I] ReadVersion DLSS v310.9.0 loaded
+[2026-09-06 21:00:02.100] [I] DLSS-NR forwarder loaded
+[2026-09-06 21:00:03.000] [I] NVSDK_NGX_D3D12_CreateFeature HandleId: 1
+[2026-09-06 21:00:03.500] [I] DLSS-NR running at 2560x1440
+[2026-09-06 21:00:03.600] [I] DLSS-NR cost: 7.41 ms total = 7.23 ms model
+[2026-09-06 21:00:03.700] [I] DLSS-NR cost: 6.90 ms total = 6.80 ms model
+[2026-09-06 21:00:03.800] [I] DLSS-NR cost: 9.10 ms total = 8.95 ms model
+[2026-09-06 21:00:04.000] [I] DLSS-NR running at 3840x2160

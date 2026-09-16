@@ -1,0 +1,13 @@
+{
+  "exe": "/games/Fixture Game/Binaries/Win64/Fixture-Win64-Shipping.exe",
+  "mode": "minimal",
+  "loader": "winmm.dll",
+  "optiscaler_version": null,
+  "feeder_version": "0.12.0",
+  "files": [
+    {"target": "__ROOT__/winmm.dll"},
+    {"target": "__ROOT__/renodx-dlss5++.addon64"},
+    {"target": "__ROOT__/nvngx_dlss.dll"},
+    {"target": "/elsewhere/Plugins/nvngx_dlssnr.dll"}
+  ]
+}
