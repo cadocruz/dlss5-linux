@@ -180,6 +180,12 @@ def cmd_install(args) -> int:
     ind = True if args.indicator else (False if args.no_indicator else None)
     for line in proton.launch_help(g, proxy, ind, opt.path):
         print("    " + line)
+    if getattr(args, "apply_launch_options", False):
+        try:
+            backup = proton.apply_launch_options(g, proton.launch_options(g, proxy, ind, opt.path))
+        except RuntimeError as e:
+            sys.exit(f"  launch options not applied: {e}")
+        print(f"\n  launch options applied (backup: {backup or 'no changes needed'})")
     from linuxport import tuning
     notes = tuning.game_notes(g.exe.name if g.exe else None)
     if notes:
@@ -282,7 +288,7 @@ def cmd_launch_options(args) -> int:
             if xl:
                 backup = proton.set_launcher_overrides(g, proton.override_entries(g, proxy, route))
             else:
-                backup = proton.set_launch_options(g, proton.launch_options(g, proxy, ind, route))
+                backup = proton.apply_launch_options(g, proton.launch_options(g, proxy, ind, route))
         except RuntimeError as e:
             sys.exit(f"  not applied: {e}")
         print(f"  applied. backup: {backup}")
@@ -431,6 +437,8 @@ def main() -> int:
             sp.add_argument("--vr", action="store_true", help="upstream's OpenXR layer; refused under Proton with the reason")
             sp.add_argument("--force-route", action="store_true", help="install a route the game does not list")
             sp.add_argument("--dry-run", action="store_true")
+            sp.add_argument("--apply-launch-options", action="store_true",
+                            help="after installation, apply generated Steam/Heroic launch environment settings")
             sp.add_argument("-y", "--yes", action="store_true")
     vk = sub.add_parser("vklayer", help="the out-of-process DLSS5VKLayer route: install state, helper, runtime, live counters")
     vk.add_argument("action", nargs="?", default="status", choices=["status", "controls", "start", "stop"],

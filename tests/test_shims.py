@@ -11,7 +11,7 @@ import pytest
 
 from conftest import FIXTURES, make_game
 from core import dlss, games as core_games, gpu, installer, net, optiscaler, pe, sources
-from linuxport import games as lgames, linux_gpu, pe as lpe, pins, state
+from linuxport import games as lgames, heroic, linux_gpu, pe as lpe, pins, state
 
 
 # --- gpu ---------------------------------------------------------------------------------
@@ -135,6 +135,20 @@ def test_scan_all_does_not_list_remembered_library_roots_as_games(monkeypatch, t
     for folder in (real, library, steam, bin_folder):
         lgames.remember_folder(folder)
     assert [g.name for g in lgames.scan_all()] == ["APlagueTale"]
+
+
+def test_scan_all_reads_heroic_game_names_from_xdg_config(monkeypatch, tmp_path):
+    game_dir = tmp_path / "Games" / "APlagueTale"
+    game_dir.mkdir(parents=True)
+    monkeypatch.setattr(lgames, "scan_steam", lambda: [])
+    monkeypatch.setattr(heroic, "_roots", lambda: [tmp_path / "heroic"])
+    root = tmp_path / "heroic"
+    (root / "legendaryConfig" / "legendary").mkdir(parents=True)
+    (root / "legendaryConfig" / "legendary" / "installed.json").write_text(
+        json.dumps({"id": {"app_name": "id", "title": "A Plague Tale: Innocence",
+                             "install_path": str(game_dir)}}), encoding="utf8")
+    got = lgames.scan_all()
+    assert [(g.name, g.source) for g in got] == [("A Plague Tale: Innocence", "Heroic")]
 
 
 def test_install_state_empty_installed_and_foreign(game, monkeypatch):

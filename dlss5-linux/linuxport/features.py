@@ -25,7 +25,7 @@ from . import openxr as lopenxr, proton
 # The library cache is gated on the version that wrote it. The Linux layer
 # changes what a game is read as (pe shims, policy), so a cache written by an
 # older port must not survive a port update either: the tag carries both.
-PORT_VERSION = "0.2"
+PORT_VERSION = "0.3"
 LIBRARY_VERSION = f"{update.VERSION}+linux{PORT_VERSION}"
 
 # What a shared result carries beyond upstream's record. `os` lets the

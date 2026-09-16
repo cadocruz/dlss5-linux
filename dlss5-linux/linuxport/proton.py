@@ -73,7 +73,27 @@ def proton_version(g: games.Game) -> str | None:
 
 def current_launch_options(g: games.Game) -> str | None:
     appid = appid_for(g)
-    return pt.launch_options_for(appid) if appid else None
+    if appid:
+        return pt.launch_options_for(appid)
+    from . import heroic
+    return heroic.current_line(g)
+
+
+def nvapi_decision(g: games.Game):
+    """Predict Proton's NVAPI policy without executing the Proton script."""
+    from . import nvapi
+    return nvapi.decision(g)
+
+
+def force_nvapi_present(options: str | None) -> bool:
+    import re as _re
+    return bool(options) and bool(_re.search(r"(?:^|\s)PROTON_FORCE_NVAPI=1(?:\s|$)", options))
+
+
+def with_force_nvapi(line: str, on: bool = True) -> str:
+    import re as _re
+    line = _re.sub(r"\s*PROTON_FORCE_NVAPI=\S+", "", line).strip()
+    return f"PROTON_FORCE_NVAPI=1 {line}" if on else line
 
 
 def override_entries(g: games.Game, proxy: str, route: str | None = None) -> list[str]:
@@ -123,7 +143,10 @@ def launch_options(g: games.Game, proxy: str, indicator: bool | None = None,
         line = _re.sub(r'\s*WINEDLLOVERRIDES="[^"]*"\s*', " ", line).strip()
     if indicator is None:
         indicator = indicator_present(current_launch_options(g))
-    return with_indicator(line, indicator)
+    line = with_indicator(line, indicator)
+    if nvapi_decision(g).state == "required":
+        line = with_force_nvapi(line)
+    return line
 
 
 def override_present(options: str | None, proxy: str, entries: list[str] | None = None) -> bool:
@@ -263,13 +286,26 @@ def launch_help(g: games.Game, proxy: str, indicator: bool | None = None,
     entries = override_entries(g, proxy, route)
     joined = ";".join(entries)
     if appid_for(g):
-        return ["steam > properties > launch options:", f"  {line}"]
+        d = nvapi_decision(g)
+        status = ("required: PROTON_FORCE_NVAPI=1 added automatically"
+                  if d.state == "required" else
+                  "not required by this Proton build" if d.state == "not_required" else
+                  "unknown: Proton build could not be inspected")
+        return ["steam > properties > launch options:", f"  {line}", f"  NVAPI detection: {status}"]
     if is_xlcore(g):
         return [
             "xivlauncher-rb runs this game through umu, so the override goes into its own config:",
             f"  settings > wine tab > dll overrides:      {joined}",
             f"  (or launcher.ini: WineDLLOverrides={joined} -- 'apply' below writes it while the launcher is closed)",
             "  d3d12 + d3d12core are required there: umu's runinprefix skips proton's own vkd3d overrides",
+        ]
+    from . import heroic
+    if heroic.is_game(g):
+        env = _environment_tokens(line)
+        return [
+            "heroic > game settings > environment variables:",
+            *[f"  key {key} value {value}" for key, value in env.items()],
+            "  (the 'apply overrides' action writes these values to Heroic's game config while Heroic is closed)",
         ]
     grid = "   ".join(f"key {e.split('=')[0]} value {e.split('=', 1)[1]}" for e in entries)
     return [
@@ -385,3 +421,37 @@ def set_launch_options(g: games.Game, line: str) -> Path:
                            "set STEAM_ROOT, or paste the line into Steam by hand")
     raise RuntimeError(f"appid {appid} not found in any localconfig.vdf "
                        f"({len(configs)} read)")
+
+
+def _environment_tokens(line: str) -> dict[str, str]:
+    """Extract launch environment assignments, preserving quoted values."""
+    import shlex
+    try:
+        tokens = shlex.split(line)
+    except ValueError:
+        tokens = line.split()
+    supported = {"WINEDLLOVERRIDES", "PROTON_FORCE_NVAPI", "PROTON_DLSS_INDICATOR",
+                 "PROTON_DLSS_UPGRADE"}
+    values: dict[str, str] = {}
+    for token in tokens:
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        if key in supported:
+            values[key] = value
+    return values
+
+
+def apply_launch_options(g: games.Game, line: str) -> Path | None:
+    """Apply generated launch settings to Steam, Heroic, or XIVLauncher."""
+    if is_xlcore(g):
+        return set_launcher_overrides(g, override_entries(g, installed_proxy(g) or "dxgi.dll"))
+    if appid_for(g):
+        return set_launch_options(g, line)
+    from . import heroic
+    if heroic.is_game(g):
+        values = _environment_tokens(line)
+        if not values:
+            raise RuntimeError("no supported environment variables were generated")
+        return heroic.set_environment(g, values)
+    raise RuntimeError("this game is not managed by Steam or Heroic")
