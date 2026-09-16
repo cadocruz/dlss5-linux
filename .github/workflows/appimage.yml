@@ -56,11 +56,12 @@ jobs:
         run: desktop-file-validate packaging/dlss5-linux.desktop
 
       # The icon is generated, so it must match what is committed - otherwise
-      # the script and the file drift and nobody notices which is authoritative.
+      # the script and the file drift and nobody can say which is authoritative.
+      # Compared as an image, not as bytes: zlib does not promise the same
+      # output across versions and does not give it, so cmp here failed on
+      # pixels that were identical.
       - name: Icon is the one the script draws
-        run: |
-          python packaging/make_icon.py /tmp/icon.png
-          cmp /tmp/icon.png packaging/dlss5-linux.png
+        run: python packaging/make_icon.py --check packaging/dlss5-linux.png
 
       - name: Build
         run: bash packaging/build-appimage.sh

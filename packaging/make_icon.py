@@ -90,7 +90,9 @@ def rounded_ground(px: list[list[tuple[int, int, int]]], radius: int) -> None:
             px[y][x] = BG
 
 
-def png(path: Path, px: list[list[tuple[int, int, int] | None]]) -> None:
+def scanlines(px: list[list[tuple[int, int, int] | None]]) -> bytes:
+    """The image as PNG wants it before compression: a filter byte per row,
+    then RGBA. This, not the file, is what two runs have to agree on."""
     raw = bytearray()
     for row in px:
         raw.append(0)                   # filter type 0
@@ -99,6 +101,33 @@ def png(path: Path, px: list[list[tuple[int, int, int] | None]]) -> None:
                 raw += bytes(4)         # transparent
             else:
                 raw += bytes(cell) + b"\xff"
+    return bytes(raw)
+
+
+def read_scanlines(path: Path) -> bytes:
+    """The same, read back out of a PNG file.
+
+    Only every IDAT chunk concatenated and inflated - which is all this needs,
+    because the writer above emits filter 0 on every row and never splits or
+    interlaces.
+    """
+    data = path.read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"{path} is not a PNG")
+    at, idat = 8, bytearray()
+    while at + 8 <= len(data):
+        size = struct.unpack(">I", data[at:at + 4])[0]
+        kind = data[at + 4:at + 8]
+        if kind == b"IDAT":
+            idat += data[at + 8:at + 8 + size]
+        elif kind == b"IEND":
+            break
+        at += 12 + size                 # length + type + body + crc
+    return zlib.decompress(bytes(idat))
+
+
+def png(path: Path, px: list[list[tuple[int, int, int] | None]]) -> None:
+    raw = scanlines(px)
 
     def chunk(kind: bytes, body: bytes) -> bytes:
         return (struct.pack(">I", len(body)) + kind + body
@@ -111,8 +140,7 @@ def png(path: Path, px: list[list[tuple[int, int, int] | None]]) -> None:
                      + chunk(b"IEND", b""))
 
 
-def main() -> int:
-    out = Path(sys.argv[1] if len(sys.argv) > 1 else "packaging/dlss5-linux.png")
+def draw() -> list[list[tuple[int, int, int] | None]]:
     px: list[list[tuple[int, int, int] | None]] = [[None] * SIZE for _ in range(SIZE)]
     rounded_ground(px, radius=40)
 
@@ -126,9 +154,25 @@ def main() -> int:
     blit(px, BRACKET_L, x0, y0, scale, DIM)
     blit(px, GLYPH_5, x0 + bracket_w + gap, y0, scale, AMBER)
     blit(px, BRACKET_R, x0 + bracket_w + gap + glyph_w + gap, y0, scale, DIM)
+    return px
 
+
+def main() -> int:
+    # --check compares the image, not the file. zlib does not promise the same
+    # bytes across versions, and it does not give them: the committed icon and
+    # one drawn on a CI runner differ by two bytes of IDAT length for pixels
+    # that are identical. The picture is the thing that must not drift.
+    if len(sys.argv) > 2 and sys.argv[1] == "--check":
+        have = Path(sys.argv[2])
+        if read_scanlines(have) != scanlines(draw()):
+            print(f"{have} is not what make_icon.py draws - regenerate it", file=sys.stderr)
+            return 1
+        print(f"{have} matches the script")
+        return 0
+
+    out = Path(sys.argv[1] if len(sys.argv) > 1 else "packaging/dlss5-linux.png")
     out.parent.mkdir(parents=True, exist_ok=True)
-    png(out, px)
+    png(out, draw())
     print(f"{out} ({out.stat().st_size} bytes, {SIZE}x{SIZE})")
     return 0
 
