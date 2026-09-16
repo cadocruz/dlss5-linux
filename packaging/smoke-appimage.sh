@@ -68,7 +68,16 @@ cd "$WORK"
 "$APP" --appimage-extract > /dev/null
 R=squashfs-root
 test -x "$R"/usr/bin/7zz -o -x "$R"/usr/bin/7zzs || { echo "no bundled 7-Zip"; exit 1; }
-test -f "$R/usr/app/vklayer-run"                 || { echo "no vklayer-run"; exit 1; }
+
+# The wrapper: present, executable, and actually runnable. `test -f` was all
+# this checked at first, and it passed on a build whose wrapper began
+# "#!/usr/bin/env bash\r" - which Steam would have run, in front of the game,
+# and the kernel would have refused as a bad interpreter.
+W="$R/usr/app/vklayer-run"
+test -f "$W" || { echo "no vklayer-run"; exit 1; }
+head -c 200 "$W" | grep -q $'\r' && { echo "vklayer-run has CRLF; bad interpreter on Linux"; exit 1; }
+head -n1 "$W" | grep -q '^#!' || { echo "vklayer-run has no shebang"; exit 1; }
+bash -n "$W" || { echo "vklayer-run does not parse"; exit 1; }
 if find "$R" \( -name 'libGL*.so*' -o -name 'libEGL*.so*' -o -name 'libvulkan*.so*' \
    -o -name 'libgbm*.so*' -o -name 'libdrm*.so*' \) | grep -q .; then
     echo "a driver library got swept in; those must come from the machine"; exit 1

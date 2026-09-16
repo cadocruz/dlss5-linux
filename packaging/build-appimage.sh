@@ -127,6 +127,16 @@ mkdir -p "$APPDIR/usr/app"
 cp -r dlss5-linux/. "$APPDIR/usr/app/"
 rm -rf "$APPDIR/usr/app/__pycache__" "$APPDIR/usr/app"/*/__pycache__ "$APPDIR/usr/app/docs"
 chmod 755 "$APPDIR/usr/app/vklayer-run"
+# A CRLF checkout - what a Windows clone does unless .gitattributes says
+# otherwise - turns the shebang into "#!/usr/bin/env bash\r" and the kernel
+# answers "bad interpreter". Steam runs this in front of the game, so the
+# failure would land on somebody who just pressed play. The first build here
+# shipped exactly that, and nothing noticed, because the check was test -f.
+if head -c 200 "$APPDIR/usr/app/vklayer-run" | grep -q $'\r'; then
+    echo "vklayer-run has CRLF line endings; it will not run on Linux." >&2
+    echo "Your checkout predates .gitattributes: rm it and git checkout -- it." >&2
+    exit 1
+fi
 cp LICENSE "$APPDIR/usr/app/" 2>/dev/null || true
 cp dlss5-linux/LICENSE.upstream "$APPDIR/usr/app/" 2>/dev/null || true
 
