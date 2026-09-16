@@ -350,6 +350,17 @@ class App(QtWidgets.QMainWindow):
         if not got:
             return False
         gs, rows, changed = got
+        # Older port versions could remember the Steam/Heroic library root
+        # itself as a manual game.  A full rescan no longer creates those
+        # entries, but a valid cache would otherwise keep displaying them.
+        before = len(gs)
+        gs = [g for g in gs if not lgames._is_library_folder(g.folder)]
+        if len(gs) != before:
+            valid = {self._key(g) for g in gs}
+            rows = {key: value for key, value in rows.items()
+                    if (str(key[0]), str(key[1])) in valid}
+            changed = [g for g in changed if g in gs]
+            features.library_save(gs, rows, self.sm)
         self.all_games = sorted(gs, key=lambda g: g.name.lower())
         self._rows = {tuple(k) if not isinstance(k, tuple) else k: list(v) for k, v in rows.items() if v}
         if changed:
@@ -791,10 +802,10 @@ class App(QtWidgets.QMainWindow):
                 backup = proton.set_launcher_overrides(g, entries); line = ";".join(entries); where = "xivlauncher-rb launcher.ini"
             else:
                 line = proton.launch_options(g, proxy, self.ck_indicator.isChecked(), self.route)
-                backup = proton.set_launch_options(g, line); where = "localconfig.vdf"
+                backup = proton.apply_launch_options(g, line); where = "launcher configuration"
         except RuntimeError as e:
             self._log(f"!! not applied: {e}", "warn"); return
-        self._log(f"> written to {where} (backup: {backup.name})", "ok"); self._log(f"   {line}")
+        self._log(f"> written to {where} (backup: {backup.name if backup else 'no changes needed'})", "ok"); self._log(f"   {line}")
         self._apply_route(self.route)
 
     def _upgrade_dlss(self) -> None:

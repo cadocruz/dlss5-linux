@@ -11,7 +11,7 @@ import pytest
 
 from conftest import FIXTURES, make_game
 from core import dlss, games as core_games, gpu, installer, net, optiscaler, pe, sources
-from linuxport import games as lgames, linux_gpu, pe as lpe, pins, state
+from linuxport import games as lgames, heroic, linux_gpu, pe as lpe, pins, state
 
 
 # --- gpu ---------------------------------------------------------------------------------
@@ -119,6 +119,36 @@ def test_scan_all_adds_remembered_folders_once(monkeypatch, tmp_path):
     assert [(g.name, g.source) for g in out] == [("Steam Game", "Manual"), ("Manual Game", "Manual")]
     lgames.forget_folder(manual)
     assert [g.name for g in lgames.scan_all()] == ["Steam Game"]
+
+
+def test_scan_all_does_not_list_remembered_library_roots_as_games(monkeypatch, tmp_path):
+    real = tmp_path / "APlagueTale"
+    real.mkdir()
+    library = tmp_path / "Heroic"
+    library.mkdir()
+    (library / "APlagueTale" / "bin").mkdir(parents=True)
+    steam = tmp_path / "Steam"
+    (steam / "steamapps").mkdir(parents=True)
+    bin_folder = tmp_path / "bin"
+    bin_folder.mkdir()
+    monkeypatch.setattr(lgames, "_orig_scan", lambda: [])
+    for folder in (real, library, steam, bin_folder):
+        lgames.remember_folder(folder)
+    assert [g.name for g in lgames.scan_all()] == ["APlagueTale"]
+
+
+def test_scan_all_reads_heroic_game_names_from_xdg_config(monkeypatch, tmp_path):
+    game_dir = tmp_path / "Games" / "APlagueTale"
+    game_dir.mkdir(parents=True)
+    monkeypatch.setattr(lgames, "scan_steam", lambda: [])
+    monkeypatch.setattr(heroic, "_roots", lambda: [tmp_path / "heroic"])
+    root = tmp_path / "heroic"
+    (root / "legendaryConfig" / "legendary").mkdir(parents=True)
+    (root / "legendaryConfig" / "legendary" / "installed.json").write_text(
+        json.dumps({"id": {"app_name": "id", "title": "A Plague Tale: Innocence",
+                             "install_path": str(game_dir)}}), encoding="utf8")
+    got = lgames.scan_all()
+    assert [(g.name, g.source) for g in got] == [("A Plague Tale: Innocence", "Heroic")]
 
 
 def test_install_state_empty_installed_and_foreign(game, monkeypatch):

@@ -24,8 +24,11 @@ from . import openxr as lopenxr, proton
 
 # The port's own version, and the only one it may call its own: update.VERSION
 # belongs to DLSS5-Autopilot, and a release named after it would be claiming
-# somebody else's. 0.0.1 is the first one that ships as a package rather than
-# as a checkout.
+# somebody else's.
+#
+# The numbering restarts here. 0.1 through 0.3 were checkout revisions - there
+# was no tag, no release, and nothing anybody could have downloaded - so 0.0.1
+# is the first version that names something a person can actually hold.
 PORT_VERSION = "0.0.1"
 
 # The library cache is gated on the version that wrote it. The Linux layer

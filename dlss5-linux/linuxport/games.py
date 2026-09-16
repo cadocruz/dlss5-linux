@@ -52,9 +52,53 @@ def install_scan() -> None:
     _games.scan_steam = scan_steam
 
 
+def scan_heroic() -> list:
+    """Read Heroic's Linux records, whose config is under XDG_CONFIG_HOME."""
+    from . import heroic
+    out = []
+    seen: set[Path] = set()
+    for root in heroic._roots():
+        for key, item in heroic._records(root):
+            loc = item.get("install_path") or item.get("path")
+            if not loc:
+                continue
+            folder = Path(loc).expanduser()
+            try:
+                folder = folder.resolve()
+                if not folder.is_dir() or folder in seen:
+                    continue
+            except OSError:
+                continue
+            seen.add(folder)
+            name = item.get("title") or item.get("app_name") or folder.name
+            out.append(_games.Game(name=name, folder=folder, source="Heroic"))
+    return out
+
+
 # --- remembered manual folders + detection of installs we did not record ----
 from core import installer as _inst, optiscaler as _opti, prefs as _prefs  # noqa: E402
 from pathlib import Path as _P  # noqa: E402
+
+# A manually chosen game folder is remembered by its exact path. Older runs
+# could also remember a library root (for example ~/Games/bin, ~/Games/Heroic
+# or ~/Games/Steam); scan_all() would then recurse into it, pick the first EXE
+# it found, and show the library itself as a game in the GUI. Keep these paths
+# usable for an explicit --target, but never present them as game entries.
+_LIBRARY_FOLDER_NAMES = {
+    "bin", "heroic", "steam", "steamlibrary", "steamapps", "common",
+    "compatdata", "epic games", "gog games", "games", "library",
+}
+_LIBRARY_MARKERS = ("steamapps", "libraryfolders.vdf", "compatdata")
+
+
+def _is_library_folder(folder: Path) -> bool:
+    low = folder.name.strip().lower()
+    if low in _LIBRARY_FOLDER_NAMES:
+        return True
+    try:
+        return any((folder / marker).exists() for marker in _LIBRARY_MARKERS)
+    except OSError:
+        return False
 
 
 def remember_folder(folder) -> None:
@@ -67,11 +111,12 @@ def forget_folder(folder) -> None:
 
 def scan_all() -> list:
     """Steam games plus every folder ever chosen by hand, deduped."""
-    out = scan_steam()
+    out = scan_steam() + scan_heroic()
     seen = {g.folder.resolve() for g in out}
     for f in _prefs.installs():
         p = _P(f)
-        if p.is_dir() and p.resolve() not in seen:
+        if (p.is_dir() and not _is_library_folder(p)
+                and p.resolve() not in seen):
             out.append(_games.Game(name=p.name, folder=p, source="Manual"))
             seen.add(p.resolve())
     return out
